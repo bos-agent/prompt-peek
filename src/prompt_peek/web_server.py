@@ -102,18 +102,6 @@ async def index(request: Request):
     return HTMLResponse(template.render())
 
 
-@app.get("/capture/{capture_id}", response_class=HTMLResponse)
-async def capture_detail(request: Request, capture_id: int):
-    template = jinja_env.get_template("capture.html")
-    return HTMLResponse(template.render(capture_id=capture_id))
-
-
-@app.get("/raw/{capture_id}", response_class=HTMLResponse)
-async def raw_view(request: Request, capture_id: int):
-    template = jinja_env.get_template("raw.html")
-    return HTMLResponse(template.render(capture_id=capture_id))
-
-
 # ── REST API ──────────────────────────────────────────────────────
 
 @app.get("/api/captures")
@@ -171,6 +159,46 @@ async def api_delete_capture(request: Request, capture_id: int):
         None, lambda: store.delete(capture_id),
     )
     return {"ok": True}
+
+
+@app.get("/api/captures/{capture_id}/system-prompt-previous")
+async def api_sys_prompt_previous(request: Request, capture_id: int):
+    store = _get_store(request)
+    if store is None:
+        return {"previous": None, "changed": False, "total_versions": 0}
+
+    loop = asyncio.get_running_loop()
+    capture = await loop.run_in_executor(
+        None, lambda: store.get_capture(capture_id),
+    )
+    if capture is None:
+        return {"previous": None, "changed": False, "total_versions": 0}
+
+    host = capture.get("host", "")
+    api_type = capture.get("api_type", "")
+
+    previous = await loop.run_in_executor(
+        None,
+        lambda: store.get_previous_system_prompt(capture_id, host, api_type),
+    )
+    total = await loop.run_in_executor(
+        None,
+        lambda: store.count_system_prompt_versions(host, api_type),
+    )
+
+    current_hash = capture.get("system_prompt_hash")
+    changed = (
+        previous is not None
+        and current_hash is not None
+        and previous["hash"] != current_hash
+    )
+
+    return {
+        "previous": previous,
+        "changed": changed,
+        "current_hash": current_hash,
+        "total_versions": total,
+    }
 
 
 # ── utilities ──────────────────────────────────────────────────────
