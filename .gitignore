@@ -224,3 +224,6 @@ __marimo__/
 
 # prompt-peek local data
 data/
+
+# Superpowers brainstorming artifacts
+.superpowers/
