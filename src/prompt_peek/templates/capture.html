@@ -10,33 +10,6 @@
 <script>
 const captureId = {{ capture_id }};
 
-function statusClass(code) {
-    if (!code) return 'status-0';
-    if (code >= 200 && code < 300) return 'status-2xx';
-    if (code >= 400 && code < 500) return 'status-4xx';
-    if (code >= 500) return 'status-5xx';
-    return 'status-0';
-}
-
-function fmtSize(bytes) {
-    if (!bytes) return '?';
-    if (bytes > 1_000_000) return (bytes/1_000_000).toFixed(1) + ' MB';
-    if (bytes > 1_000) return (bytes/1_000).toFixed(1) + ' KB';
-    return bytes + ' B';
-}
-
-function fmtTime(ts) {
-    return new Date(ts * 1000).toLocaleString();
-}
-
-function formatJSON(obj) {
-    try {
-        return JSON.stringify(obj, null, 2);
-    } catch(e) {
-        return String(obj);
-    }
-}
-
 async function load() {
     const res  = await fetch('/api/captures/' + captureId);
     const data = await res.json();
@@ -56,11 +29,12 @@ async function load() {
         messagesHTML = '<div class="section"><div class="section-title">📨 Messages (' + c.request_body_parsed.messages.length + ')</div><div class="message-list">';
         for (const msg of c.request_body_parsed.messages) {
             const role = msg.role || 'unknown';
-            const content = typeof msg.content === 'string'
+            const rawContent = typeof msg.content === 'string'
                 ? msg.content
                 : (msg.content ? formatJSON(msg.content) : '(empty)');
-            const name = msg.name || '';
-            const truncated = content.length > 500;
+            const content = escapeHTML(rawContent);
+            const name = escapeHTML(msg.name || '');
+            const truncated = rawContent.length > 500;
             const visible = truncated ? content.slice(0, 500) : content;
             messagesHTML += `
                 <div class="message-item role-${role}">
@@ -97,7 +71,7 @@ async function load() {
         toolsHTML = `
             <div class="section">
                 <div class="section-title">🔧 Tools (${c.request_body_parsed.tools.length}) <span class="toggle" onclick="this.closest('.section').querySelector('.code-block').classList.toggle('hide')">toggle</span></div>
-                <div class="code-block"><pre>${formatJSON(c.request_body_parsed.tools)}</pre></div>
+                <div class="code-block"><pre>${escapeHTML(formatJSON(c.request_body_parsed.tools))}</pre></div>
             </div>`;
     }
 
@@ -105,14 +79,14 @@ async function load() {
 
     document.getElementById('detail').innerHTML = `
         <div class="detail-header">
-            <div class="url">${c.method} ${c.url}</div>
+            <div class="url">${escapeHTML(c.method)} ${escapeHTML(c.url)}</div>
             <div class="detail-meta">
-                <span>${fmtTime(c.timestamp)}</span>
-                <span>${c.host}</span>
-                <span class="api-badge ${c.api_type}">${c.api_type}</span>
+                <span>${formatTime(c.timestamp)}</span>
+                <span>${escapeHTML(c.host)}</span>
+                <span class="api-badge ${c.api_type}">${escapeHTML(c.api_type)}</span>
                 <span class="status ${stClass}">${c.response_status || '…'}</span>
                 <span>${c.duration_ms ? Math.round(c.duration_ms) + 'ms' : ''}</span>
-                <span>req ${fmtSize(c.request_size)} · res ${fmtSize(c.response_size)}</span>
+                <span>req ${formatSize(c.request_size)} · res ${formatSize(c.response_size)}</span>
             </div>
         </div>
 
@@ -122,25 +96,19 @@ async function load() {
 
         <div class="section">
             <div class="section-title">📤 Request Headers${rawLink} <span class="toggle" onclick="this.closest('.section').querySelector('.code-block').classList.toggle('hide')">toggle</span></div>
-            <div class="code-block"><pre>${formatJSON(c.request_headers)}</pre></div>
+            <div class="code-block"><pre>${escapeHTML(formatJSON(c.request_headers))}</pre></div>
         </div>
 
         <div class="section">
             <div class="section-title">📥 Response (${c.response_status || '…'})  <span class="toggle" onclick="this.closest('.section').querySelector('.code-block').classList.toggle('hide')">toggle</span></div>
-            <div class="code-block"><pre>${c.response_body_parsed ? formatJSON(c.response_body_parsed) : (c.response_body ? escapeHTML(c.response_body) : '(empty)')}</pre></div>
+            <div class="code-block"><pre>${escapeHTML(c.response_body_parsed ? formatJSON(c.response_body_parsed) : (c.response_body || '(empty)'))}</pre></div>
         </div>
 
         <div class="section">
             <div class="section-title">📥 Response Headers <span class="toggle" onclick="this.closest('.section').querySelector('.code-block').classList.toggle('hide')">toggle</span></div>
-            <div class="code-block"><pre>${formatJSON(c.response_headers)}</pre></div>
+            <div class="code-block"><pre>${escapeHTML(formatJSON(c.response_headers))}</pre></div>
         </div>
     `;
-}
-
-function escapeHTML(str) {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
 }
 
 load();

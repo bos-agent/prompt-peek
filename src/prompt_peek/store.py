@@ -1,11 +1,14 @@
 """SQLite store for captured LLM API requests and responses."""
 
 import json
+import logging
 import sqlite3
 import threading
 import time
 from pathlib import Path
 from typing import Optional, Any
+
+logger = logging.getLogger(__name__)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS captures (
@@ -154,7 +157,8 @@ class Store:
         return self._row_to_dict(row) if row else None
 
     def count(self, *, host: Optional[str] = None,
-              api_type: Optional[str] = None) -> int:
+              api_type: Optional[str] = None,
+              search: Optional[str] = None) -> int:
         conn = self._get_conn()
         query = "SELECT COUNT(*) FROM captures WHERE 1=1"
         params: list[Any] = []
@@ -164,6 +168,10 @@ class Store:
         if api_type:
             query += " AND api_type = ?"
             params.append(api_type)
+        if search:
+            query += " AND (url LIKE ? OR request_body LIKE ? OR response_body LIKE ?)"
+            pattern = f"%{search}%"
+            params.extend([pattern, pattern, pattern])
         return conn.execute(query, params).fetchone()[0]
 
     def delete(self, capture_id: int):

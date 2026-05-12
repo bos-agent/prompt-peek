@@ -2,11 +2,11 @@
 name = "prompt-peek"
 version = "0.1.0"
 description = "Intercept and inspect LLM prompts from coding agents"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "prompt-peek" }]
 
 dependencies = [
-    "mitmproxy>=9.0",
+    "mitmproxy>=11.0",
     "fastapi",
     "uvicorn",
     "jinja2",

@@ -1,7 +1,9 @@
 """prompt-peek entry point — starts the MITM proxy and web UI in one process."""
 
 import asyncio
+import logging
 import threading
+import traceback
 from pathlib import Path
 
 import uvicorn
@@ -10,6 +12,8 @@ from .config import DEFAULT_CONFIG, Config
 from .proxy_addon import EventBus, PromptPeekAddon
 from .store import Store
 from . import web_server
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_certs():
@@ -21,7 +25,7 @@ def _ensure_certs():
     try:
         cert_path.parent.mkdir(parents=True, exist_ok=True)
     except (OSError, PermissionError):
-        print(f"[certs] cannot create {cert_path.parent} — cert will be generated on first HTTPS request")
+        logger.warning("Cannot create %s — cert will be generated on first HTTPS request", cert_path.parent)
         return
 
     try:
@@ -32,16 +36,17 @@ def _ensure_certs():
             key_size=2048,
         )
     except Exception as e:
-        print(f"[certs] cert generation failed: {e} — will be created on first HTTPS request")
+        logger.warning("Cert generation failed: %s — will be created on first HTTPS request", e)
         return
 
     if cert_path.exists():
-        print(f"[certs] CA certificate generated at {cert_path}")
+        logger.info("CA certificate generated at %s", cert_path)
     else:
-        print(f"[certs] cert generation deferred (will be created on first HTTPS request)")
+        logger.info("Cert generation deferred (will be created on first HTTPS request)")
 
 
-def _run_proxy(config: Config, store: Store, event_bus: EventBus):
+def _run_proxy(config: Config, store: Store, event_bus: EventBus,
+               shutdown_event: threading.Event):
     """Run mitmproxy in a dedicated OS thread with its own event loop."""
     from mitmproxy.options import Options
     from mitmproxy.tools.dump import DumpMaster
@@ -51,48 +56,67 @@ def _run_proxy(config: Config, store: Store, event_bus: EventBus):
             listen_host=config.proxy_host,
             listen_port=config.proxy_port,
         )
-        # DumpMaster loads default addons (including proxyserver) automatically.
         master = DumpMaster(opts, with_termlog=False, with_dumper=False)
         addon = PromptPeekAddon(store, config, event_bus)
         master.addons.add(addon)
 
-        print(f"[proxy] listening on {config.proxy_host}:{config.proxy_port}", flush=True)
-        await master.run()
+        logger.info("Proxy listening on %s:%s", config.proxy_host, config.proxy_port)
+
+        async def _watch_shutdown():
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, shutdown_event.wait)
+            logger.info("Proxy shutting down…")
+            master.shutdown()
+
+        done, _ = await asyncio.wait(
+            [asyncio.ensure_future(master.run()),
+             asyncio.ensure_future(_watch_shutdown())],
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        # Cancel whichever task didn't finish.
+        for task in done:
+            if not task.cancelled():
+                try:
+                    await task
+                except Exception:
+                    pass
 
     try:
         asyncio.run(_async_run())
     except Exception:
-        import sys, traceback
-        print("[proxy] FATAL — proxy thread crashed:", file=sys.stderr, flush=True)
-        traceback.print_exc(file=sys.stderr)
-        # Store the error on app.state so /health can report it.
-        web_server.app.state.proxy_error = traceback.format_exc()
+        tb = traceback.format_exc()
+        logger.critical("Proxy thread crashed:\n%s", tb)
+        web_server.app.state.proxy_error = tb
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     config = DEFAULT_CONFIG
 
-    # Pre-generate CA certificate so /cert endpoint works immediately.
     _ensure_certs()
 
     store = Store(config.db_path)
     event_bus = EventBus()
+    shutdown_event = threading.Event()
 
-    # Wire shared state into the FastAPI app (replaces module-level globals).
     web_server.app.state.store = store
     web_server.app.state.event_bus = event_bus
     web_server.app.state.proxy_error = None
+    web_server.app.state.shutdown_event = shutdown_event
 
-    # Start proxy in a background thread.
     proxy_thread = threading.Thread(
         target=_run_proxy,
-        args=(config, store, event_bus),
+        args=(config, store, event_bus, shutdown_event),
         daemon=True,
     )
     proxy_thread.start()
 
-    # Start web UI in the main thread.
-    print(f"[web]   serving on http://{config.web_host}:{config.web_port}")
+    logger.info("Web UI serving on http://%s:%s", config.web_host, config.web_port)
     uvicorn.run(
         web_server.app,
         host=config.web_host,

@@ -1,6 +1,7 @@
 """mitmproxy addon that intercepts LLM API calls and persists them to the store."""
 
 import json
+import logging
 import threading
 import time
 from collections import deque
@@ -10,6 +11,8 @@ from mitmproxy import http
 
 from prompt_peek.config import Config
 from prompt_peek.store import Store
+
+logger = logging.getLogger(__name__)
 
 # Max queued events before older ones are dropped.
 _EVENT_QUEUE_CAP = 5000
@@ -60,7 +63,9 @@ class PromptPeekAddon:
 
     def _matches_api(self, path: str) -> bool:
         for pattern in self.config.api_patterns:
-            if pattern in path:
+            # Match as a path prefix so /v1/chat/completions
+            # doesn't accidentally match /fake/v1/chat/completions.
+            if path == pattern or path.startswith(pattern + "/") or path.startswith(pattern + "?"):
                 return True
         return False
 
@@ -90,7 +95,7 @@ class PromptPeekAddon:
             try:
                 body_json = json.loads(body)
             except (json.JSONDecodeError, TypeError):
-                pass
+                logger.debug("Failed to parse request body as JSON: %s", flow.request.path)
 
         api_type = self._detect_api_type(flow.request.path, body_json)
         req_headers = dict(flow.request.headers)
@@ -169,7 +174,9 @@ class PromptPeekAddon:
             duration_ms=duration_ms,
             response_size=0,
         )
+        error_msg = str(flow.error) if flow.error else "unknown"
+        logger.warning("Proxy error for capture %d: %s", capture_id, error_msg)
         self.event_bus.push({
             "id": capture_id,
-            "error": str(flow.error) if flow.error else "unknown",
+            "error": error_msg,
         })

@@ -21,9 +21,6 @@ BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 TEMPLATES_DIR = BASE_DIR / "templates"
 
-# Only async-safe shared state (accessed from the event loop exclusively).
-ws_clients: set[WebSocket] = set()
-
 
 # ── helpers ───────────────────────────────────────────────────────
 
@@ -72,10 +69,14 @@ async def _broadcast_events(event_bus: EventBus, ws_set: set[WebSocket]):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    app.state.ws_clients = set()
     event_bus: EventBus = app.state.event_bus
-    task = asyncio.create_task(_broadcast_events(event_bus, ws_clients))
+    task = asyncio.create_task(_broadcast_events(event_bus, app.state.ws_clients))
     yield
-    # ── graceful shutdown ──
+    # Signal the proxy thread to shut down.
+    shutdown_event = getattr(app.state, 'shutdown_event', None)
+    if shutdown_event:
+        shutdown_event.set()
     task.cancel()
     try:
         await task
@@ -138,7 +139,7 @@ async def api_list_captures(
     )
     total = await loop.run_in_executor(
         None,
-        lambda: store.count(host=host, api_type=api_type),
+        lambda: store.count(host=host, api_type=api_type, search=search),
     )
     for c in captures:
         _deserialize_capture_fields(c)
@@ -233,12 +234,11 @@ HTTPS_PROXY=http://127.0.0.1:8083 curl -s https://example.com</pre>
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await ws.accept()
-    ws_clients.add(ws)
+    ws.app.state.ws_clients.add(ws)
     try:
-        # Keep connection alive; broadcasts happen via _broadcast_events.
         while True:
             await ws.receive_text()
     except WebSocketDisconnect:
         pass
     finally:
-        ws_clients.discard(ws)
+        ws.app.state.ws_clients.discard(ws)
