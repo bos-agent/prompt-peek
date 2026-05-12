@@ -1,5 +1,6 @@
 """mitmproxy addon that intercepts LLM API calls and persists them to the store."""
 
+import hashlib
 import json
 import logging
 import threading
@@ -100,6 +101,19 @@ class PromptPeekAddon:
         api_type = self._detect_api_type(flow.request.path, body_json)
         req_headers = dict(flow.request.headers)
 
+        # Compute system_prompt_hash
+        system_prompt_hash = None
+        if body_json and isinstance(body_json, dict):
+            messages = body_json.get("messages", [])
+            for m in messages:
+                if isinstance(m, dict) and m.get("role") == "system":
+                    content = m.get("content", "")
+                    if isinstance(content, str):
+                        system_prompt_hash = hashlib.sha256(
+                            content.encode("utf-8")
+                        ).hexdigest()[:16]
+                    break
+
         capture_id = self.store.insert(
             timestamp=time.time(),
             method=flow.request.method,
@@ -113,6 +127,7 @@ class PromptPeekAddon:
             response_body=None,
             api_type=api_type,
             request_size=len(body) if body else 0,
+            system_prompt_hash=system_prompt_hash,
         )
 
         # Stash on flow for response-phase correlation.
