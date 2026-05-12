@@ -2,88 +2,185 @@
 {% block title %}prompt-peek · captures{% endblock %}
 
 {% block content %}
-<div class="toolbar">
-    <select id="filter-api-type">
-        <option value="">All APIs</option>
-        <option value="openai">OpenAI</option>
-        <option value="anthropic">Anthropic</option>
-        <option value="google">Google</option>
-        <option value="azure">Azure</option>
-        <option value="chat">Other Chat</option>
-        <option value="unknown">Unknown</option>
-    </select>
-    <input type="text" id="search" placeholder="Search URL or body…">
-    <span class="count" id="count">0 captures</span>
-</div>
-
-<ul class="capture-list" id="capture-list"></ul>
-
-<div class="empty-state" id="empty-state">
-    <h2>Waiting for traffic</h2>
-    <p>No LLM API calls intercepted yet. Follow the steps below.</p>
-
-    <div style="text-align:left;max-width:520px;margin:24px auto 0;font-size:13px;line-height:2;">
-        <div style="margin-bottom:16px;padding:12px;background:var(--bg-tertiary);border-radius:6px;">
-            <strong>1. Install the CA certificate</strong><br>
-            <span style="color:var(--text-muted)">HTTPS traffic must be decrypted. Download and trust the cert:</span><br>
-            <a href="/cert" style="font-family:monospace;font-size:12px;">⬇ Download mitmproxy-ca-cert.pem</a><br>
-            <span style="color:var(--text-muted);font-size:11px;">macOS: double-click → add to Keychain → mark as "Always Trust"</span>
+<div class="split-pane">
+    <!-- Left: list -->
+    <div class="list-panel" id="list-panel">
+        <div class="toolbar">
+            <select id="filter-api-type">
+                <option value="">All APIs</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="google">Google</option>
+                <option value="azure">Azure</option>
+                <option value="chat">Other Chat</option>
+                <option value="unknown">Unknown</option>
+            </select>
+            <input type="text" id="search" placeholder="Search URL or body…">
+            <span class="count" id="count">0 captures</span>
         </div>
-        <div style="margin-bottom:16px;padding:12px;background:var(--bg-tertiary);border-radius:6px;">
-            <strong>2. Set proxy environment variables</strong><br>
-            <code style="display:block;background:var(--bg);padding:6px 10px;border-radius:4px;margin:4px 0;">
-                export HTTP_PROXY=http://127.0.0.1:8083<br>
-                export HTTPS_PROXY=http://127.0.0.1:8083
-            </code>
-            <span style="color:var(--text-muted);font-size:11px;">Or configure your coding agent's proxy settings directly.</span>
+        <ul class="capture-list" id="capture-list"></ul>
+        <div class="empty-state" id="empty-state">
+            <h2>Waiting for traffic</h2>
+            <p>No LLM API calls intercepted yet. Follow the steps below.</p>
+            <div style="text-align:left;max-width:520px;margin:24px auto 0;font-size:13px;line-height:2;">
+                <div style="margin-bottom:16px;padding:12px;background:var(--bg-tertiary);border-radius:6px;">
+                    <strong>1. Install the CA certificate</strong><br>
+                    <span style="color:var(--text-muted)">HTTPS traffic must be decrypted. Download and trust the cert:</span><br>
+                    <a href="/cert" style="font-family:monospace;font-size:12px;">⬇ Download mitmproxy-ca-cert.pem</a><br>
+                    <span style="color:var(--text-muted);font-size:11px;">macOS: double-click → add to Keychain → mark as "Always Trust"</span>
+                </div>
+                <div style="margin-bottom:16px;padding:12px;background:var(--bg-tertiary);border-radius:6px;">
+                    <strong>2. Set proxy environment variables</strong><br>
+                    <code style="display:block;background:var(--bg);padding:6px 10px;border-radius:4px;margin:4px 0;">
+                        export HTTP_PROXY=http://127.0.0.1:8083<br>
+                        export HTTPS_PROXY=http://127.0.0.1:8083
+                    </code>
+                </div>
+                <div style="padding:12px;background:var(--bg-tertiary);border-radius:6px;">
+                    <strong>3. Run your coding agent</strong><br>
+                    <span style="color:var(--text-muted);font-size:11px;">Captures will appear here in real time. The proxy listens on port <strong>8083</strong>.</span>
+                </div>
+            </div>
         </div>
-        <div style="padding:12px;background:var(--bg-tertiary);border-radius:6px;">
-            <strong>3. Run your coding agent</strong><br>
-            <span style="color:var(--text-muted);font-size:11px;">Captures will appear here in real time. The proxy listens on port <strong>8083</strong>.</span>
+    </div>
+
+    <!-- Divider -->
+    <div class="divider" id="divider"></div>
+
+    <!-- Right: detail pane -->
+    <div class="detail-pane" id="detail-pane">
+        <button class="close-btn" onclick="closeDetail()" title="Close (Esc)">&times;</button>
+        <div id="detail-loading" style="text-align:center;padding:40px;display:none;">
+            <span class="spinner"></span> Loading…
+        </div>
+        <div id="detail-content"></div>
+        <div id="detail-empty" style="text-align:center;padding:80px 20px;color:var(--text-muted);">
+            <p>Select a capture to inspect</p>
+        </div>
+        <div id="detail-deleted" style="text-align:center;padding:40px;display:none;">
+            <p>This capture was deleted.</p>
         </div>
     </div>
 </div>
 
-<div id="toast" style="display:none;"></div>
+<div class="status-bar">
+    <span id="status-count">0 captures</span>
+    <span class="ws-indicator">
+        <span class="ws-dot" id="ws-dot"></span>
+        <span id="ws-label">connecting</span>
+    </span>
+</div>
 
+<script src="/static/marked.min.js"></script>
 <script>
 // ── State ──────────────────────────────────────────────────
-let captures = [];
-let totalCount = 0;
+const state = {
+    captures: [],
+    totalCount: 0,
+    selectedId: null,
+    selectedData: null,
+    wsConnected: false,
+};
 
-// ── Fetch initial list ─────────────────────────────────────
-async function loadCaptures() {
-    const apiType = document.getElementById('filter-api-type').value;
-    const search  = document.getElementById('search').value;
+const $ = (sel) => document.querySelector(sel);
+
+// ── API ────────────────────────────────────────────────────
+async function fetchCaptures() {
+    const apiType = $('#filter-api-type').value;
+    const search  = $('#search').value;
     const params  = new URLSearchParams({ limit: 200 });
     if (apiType) params.set('api_type', apiType);
     if (search)  params.set('search', search);
-
     const res = await fetch('/api/captures?' + params);
     const data = await res.json();
-    captures = data.captures;
-    totalCount = data.total;
-    render();
+    state.captures = data.captures;
+    state.totalCount = data.total;
+    renderList();
 }
 
-// ── Render ─────────────────────────────────────────────────
-function render() {
-    const list  = document.getElementById('capture-list');
-    const empty = document.getElementById('empty-state');
-    const count = document.getElementById('count');
+async function fetchCapture(id) {
+    const res = await fetch('/api/captures/' + id);
+    const data = await res.json();
+    return data.capture;
+}
 
-    count.textContent = totalCount + ' capture' + (totalCount !== 1 ? 's' : '');
-    empty.style.display = captures.length === 0 ? 'block' : 'none';
+async function fetchSysPromptPrevious(id) {
+    const res = await fetch('/api/captures/' + id + '/system-prompt-previous');
+    return await res.json();
+}
+
+// ── WebSocket ──────────────────────────────────────────────
+function connectWS() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(proto + '://' + location.host + '/ws');
+    ws.onopen = () => {
+        state.wsConnected = true;
+        $('#ws-dot').className = 'ws-dot connected';
+        $('#ws-label').textContent = 'live';
+    };
+    ws.onclose = () => {
+        state.wsConnected = false;
+        $('#ws-dot').className = 'ws-dot disconnected';
+        $('#ws-label').textContent = 'reconnecting…';
+        setTimeout(connectWS, 2000);
+    };
+    ws.onmessage = (ev) => {
+        const events = JSON.parse(ev.data);
+        for (const e of events) {
+            if (e.method) {
+                state.captures.unshift({
+                    id: e.id, method: e.method, host: e.host,
+                    path: e.path, url: 'https://' + e.host + e.path,
+                    api_type: e.api_type, response_status: null,
+                    duration_ms: null, request_size: e.request_size,
+                    response_size: null,
+                });
+                state.totalCount++;
+            }
+            if (e.response_status !== undefined || e.error !== undefined) {
+                const found = state.captures.find(c => c.id === e.id);
+                if (found) {
+                    found.response_status = e.response_status || 0;
+                    found.duration_ms = e.duration_ms || 0;
+                    found.response_size = e.response_size || 0;
+                }
+                if (state.selectedId === e.id) {
+                    fetchCapture(e.id).then(c => {
+                        state.selectedData = c;
+                        if (c) renderDetail();
+                    });
+                }
+            }
+        }
+        renderList();
+        if (events.some(e => e.method)) {
+            const first = $('.capture-item');
+            if (first) { first.classList.add('new-item');
+                setTimeout(() => first.classList.remove('new-item'), 600); }
+        }
+    };
+}
+
+// ── List rendering ─────────────────────────────────────────
+function renderList() {
+    const list  = $('#capture-list');
+    const empty = $('#empty-state');
+    const count = $('#count');
+    const statusCount = $('#status-count');
+
+    count.textContent = state.totalCount + ' capture' + (state.totalCount !== 1 ? 's' : '');
+    statusCount.textContent = count.textContent;
+    empty.style.display = state.captures.length === 0 ? 'block' : 'none';
     list.innerHTML = '';
 
-    for (const c of captures) {
+    for (const c of state.captures) {
         const li = document.createElement('li');
         li.className = 'capture-item';
+        if (c.id === state.selectedId) li.classList.add('selected');
         li.setAttribute('data-id', c.id);
-        li.onclick = () => { window.location = '/capture/' + c.id; };
+        li.onclick = () => selectCapture(c.id);
 
         const stClass = statusClass(c.response_status);
-
         li.innerHTML = `
             <span class="method POST">${escapeHTML(c.method)}</span>
             <span class="host" title="${escapeHTML(c.url)}">${escapeHTML(c.host)}${escapeHTML(c.path)}</span>
@@ -96,65 +193,480 @@ function render() {
     }
 }
 
-// ── WebSocket live updates ─────────────────────────────────
-function connectWS() {
-    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const ws = new WebSocket(proto + '://' + location.host + '/ws');
+// ── Capture selection ──────────────────────────────────────
+async function selectCapture(id) {
+    state.selectedId = id;
+    renderList();
 
-    ws.onmessage = (ev) => {
-        const events = JSON.parse(ev.data);
-        for (const e of events) {
-            // Request event — insert new capture at top
-            if (e.method) {
-                captures.unshift({
-                    id: e.id,
-                    method: e.method,
-                    host: e.host,
-                    path: e.path,
-                    url: 'https://' + e.host + e.path,
-                    api_type: e.api_type,
-                    response_status: null,
-                    duration_ms: null,
-                    request_size: e.request_size,
-                    response_size: null,
-                });
-                totalCount++;
-            }
-            // Response event — update existing
-            if (e.response_status !== undefined || e.error !== undefined) {
-                const found = captures.find(c => c.id === e.id);
-                if (found) {
-                    found.response_status = e.response_status || 0;
-                    found.duration_ms = e.duration_ms || 0;
-                    found.response_size = e.response_size || 0;
-                }
-            }
-        }
-        render();
+    $('#detail-empty').style.display = 'none';
+    $('#detail-deleted').style.display = 'none';
+    $('#detail-content').innerHTML = '';
+    $('#detail-loading').style.display = 'block';
+    $('#detail-pane').classList.add('open');
 
-        // Flash new items
-        if (events.some(e => e.method)) {
-            const first = document.querySelector('.capture-item:first-child');
-            if (first) {
-                first.classList.add('new-item');
-                setTimeout(() => first.classList.remove('new-item'), 600);
-            }
-        }
-    };
+    const c = await fetchCapture(id);
+    state.selectedData = c;
+    $('#detail-loading').style.display = 'none';
 
-    ws.onclose = () => setTimeout(connectWS, 2000);
+    if (!c) {
+        $('#detail-deleted').style.display = 'block';
+        return;
+    }
+    await renderDetail();
+
+    const row = document.querySelector(`.capture-item[data-id="${id}"]`);
+    if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
 
+function closeDetail() {
+    state.selectedId = null;
+    state.selectedData = null;
+    $('#detail-pane').classList.remove('open');
+    renderList();
+}
+
+// ── Content extraction ─────────────────────────────────────
+function extractSysPrompt(messages) {
+    if (!messages) return null;
+    const sys = messages.find(m => m.role === 'system');
+    if (!sys) return null;
+    return typeof sys.content === 'string' ? sys.content : formatJSON(sys.content);
+}
+
+function extractResponseContent(c) {
+    const body = c.response_body_parsed;
+    if (!body) return { type: 'empty' };
+
+    if (c.api_type === 'openai' && body.choices) {
+        const msg = body.choices[0]?.message;
+        return {
+            type: 'text',
+            content: msg?.content || '',
+            finishReason: body.choices[0]?.finish_reason,
+            model: body.model,
+            usage: body.usage,
+            toolCalls: msg?.tool_calls,
+        };
+    }
+    if (c.api_type === 'anthropic') {
+        const textParts = (body.content || []).filter(p => p.type === 'text');
+        const toolParts = (body.content || []).filter(p => p.type === 'tool_use');
+        return {
+            type: 'text',
+            content: textParts.map(p => p.text).join('\n'),
+            finishReason: body.stop_reason,
+            model: body.model,
+            usage: body.usage,
+            toolCalls: toolParts,
+        };
+    }
+    if (c.api_type === 'google' && body.candidates) {
+        const parts = (body.candidates[0]?.content?.parts || []).map(p => p.text || '').join('\n');
+        return {
+            type: 'text',
+            content: parts,
+            finishReason: body.candidates[0]?.finishReason,
+            model: body.modelVersion,
+            usage: body.usageMetadata,
+        };
+    }
+    return { type: 'json', json: body };
+}
+
+// ── Simple line diff ───────────────────────────────────────
+function lineDiff(oldText, newText) {
+    const oldLines = (oldText || '').split('\n');
+    const newLines = (newText || '').split('\n');
+    const result = [];
+    let oi = 0, ni = 0;
+    while (oi < oldLines.length || ni < newLines.length) {
+        if (oi < oldLines.length && ni < newLines.length && oldLines[oi] === newLines[ni]) {
+            result.push({ type: 'same', text: oldLines[oi] });
+            oi++; ni++;
+        } else if (ni < newLines.length) {
+            result.push({ type: 'add', text: newLines[ni] });
+            ni++;
+        } else {
+            result.push({ type: 'remove', text: oldLines[oi] });
+            oi++;
+        }
+    }
+    return result;
+}
+
+function renderDiff(oldText, newText) {
+    const diff = lineDiff(oldText, newText);
+    return diff.map(d => {
+        const cls = d.type === 'add' ? 'diff-add' : d.type === 'remove' ? 'diff-remove' : '';
+        return `<span class="${cls}">${d.type === 'add' ? '+' : d.type === 'remove' ? '-' : ' '} ${escapeHTML(d.text)}</span>`;
+    }).join('\n');
+}
+
+// ── HTML sanitizer ─────────────────────────────────────────
+function sanitizeHtml(html) {
+    const el = document.createElement('div');
+    el.innerHTML = html;
+    el.querySelectorAll('script, iframe, object, embed').forEach(n => n.remove());
+    el.querySelectorAll('*').forEach(n => {
+        for (const attr of [...n.attributes]) {
+            if (attr.name.startsWith('on') || (
+                attr.name === 'href' && /^javascript:/i.test(attr.value)
+            )) {
+                n.removeAttribute(attr.name);
+            }
+        }
+    });
+    return el.innerHTML;
+}
+
+// ── Detail rendering ───────────────────────────────────────
+async function renderDetail() {
+    const c = state.selectedData;
+    if (!c) return;
+
+    const stClass = statusClass(c.response_status);
+    let html = '';
+
+    // Metadata bar
+    html += `<div class="detail-header">
+        <div class="url">${escapeHTML(c.method)} ${escapeHTML(c.url)}</div>
+        <div class="detail-meta">
+            <span>${formatTime(c.timestamp)}</span>
+            <span>${escapeHTML(c.host)}</span>
+            <span class="api-badge ${c.api_type}">${escapeHTML(c.api_type)}</span>
+            <span class="status ${stClass}">${c.response_status || '…'}</span>
+            <span>${c.duration_ms ? Math.round(c.duration_ms) + 'ms' : ''}</span>
+            <span>req ${formatSize(c.request_size)} · res ${formatSize(c.response_size)}</span>
+            <a href="#" onclick="toggleRaw();return false;" style="font-size:12px;">raw json</a>
+        </div>
+    </div>`;
+
+    // System Prompt
+    const sysContent = c.request_body_parsed
+        ? extractSysPrompt(c.request_body_parsed.messages) : null;
+    if (sysContent) {
+        const prev = await fetchSysPromptPrevious(c.id);
+        const changed = prev && prev.changed;
+        const badgeClass = changed ? 'badge-changed' : 'badge-unchanged';
+        const badgeText = changed
+            ? `changed vs #${prev.previous.id}`
+            : (prev.previous ? `unchanged vs #${prev.previous.id}` : 'first seen');
+
+        html += `<div class="section">
+            <div class="section-title">
+                ⚙ System Prompt
+                <span class="badge ${badgeClass}">${badgeText}</span>
+                <span class="toggle" onclick="toggleSection(this)">toggle</span>
+            </div>
+            <div class="sys-prompt-body code-block">
+                <pre class="sys-prompt-text">${escapeHTML(sysContent)}</pre>
+                <pre class="sys-prompt-diff" style="display:none;">${prev && prev.previous ? renderDiff(prev.previous.content, sysContent) : ''}</pre>
+            </div>`;
+        if (changed !== undefined) {
+            html += `<div style="margin-top:4px;font-size:12px;">
+                <label><input type="checkbox" onchange="toggleSysDiff(this)"> Show diff</label>`;
+            if (prev.total_versions > 1) {
+                html += ` · <a href="#" onclick="filterByHostApiType('${escapeHTML(c.host)}','${escapeHTML(c.api_type)}');return false;">view all versions (${prev.total_versions})</a>`;
+            }
+            html += `</div>`;
+        }
+        html += `</div>`;
+    }
+
+    $('#detail-content').innerHTML = html;
+
+    renderToolsSection(c);
+    renderMessagesSection(c);
+    renderResponseSection(c);
+    renderHeadersSection(c);
+}
+
+// ── Tools section ──────────────────────────────────────────
+function categorizeTool(name) {
+    const n = name.toLowerCase();
+    if (/\bread\b|\bget\b|\blist\b|\bview\b|\bshow\b|\bcat\b|\bls\b|\bglob\b/i.test(n)) return 'tool-read';
+    if (/\bwrite\b|\bcreate\b|\bedit\b|\bdelete\b|\bremove\b|\bsave\b|\binsert\b|\bupdate\b|\bpatch\b|\bput\b|\bmv\b|\bcp\b|\brm\b/i.test(n)) return 'tool-write';
+    if (/\bbash\b|\bshell\b|\bexec\b|\brun\b|\bspawn\b|\bterminal\b|\bcommand\b|\bsh\b/i.test(n)) return 'tool-shell';
+    if (/\bsearch\b|\bfind\b|\bgrep\b|\bquery\b|\blookup\b/i.test(n)) return 'tool-search';
+    return 'tool-other';
+}
+
+function renderToolsSection(c) {
+    const tools = c.request_body_parsed && c.request_body_parsed.tools;
+    if (!tools || !tools.length) return;
+
+    let html = `<div class="section">
+        <div class="section-title">🔧 Tools (${tools.length})
+            <span class="toggle" onclick="toggleSection(this)">toggle</span>
+        </div>`;
+
+    // Tag cloud
+    html += '<div class="tool-tags">';
+    for (const t of tools) {
+        const name = t.name || (t.function && t.function.name) || '(unnamed)';
+        const cat = categorizeTool(name);
+        html += `<span class="tool-tag ${cat}" onclick="document.getElementById('tool-${CSS.escape(name)}').scrollIntoView({behavior:'smooth'});this.closest('.section').querySelectorAll('details').forEach(d=>d.open=true)">${escapeHTML(name)}</span>`;
+    }
+    html += '</div>';
+
+    // Tool cards
+    for (const t of tools) {
+        const name = t.name || (t.function && t.function.name) || '(unnamed)';
+        const desc = t.description || (t.function && t.function.description) || '';
+        const schema = t.input_schema || (t.function && t.function.parameters) || null;
+        const required = (schema && schema.required) || [];
+        const props = (schema && schema.properties) || {};
+
+        html += `<details class="tool-card" id="tool-${CSS.escape(name)}">
+            <summary>${escapeHTML(name)}</summary>
+            <div class="tool-desc">${escapeHTML(desc)}</div>`;
+        if (Object.keys(props).length) {
+            html += '<div class="tool-params">';
+            for (const [pname, pinfo] of Object.entries(props)) {
+                const req = required.includes(pname) ? ' <span class="param-required">required</span>' : '';
+                html += `<span class="tool-param">${escapeHTML(pname)}${req} <span class="param-type">${escapeHTML(pinfo.type || 'any')}</span></span>`;
+            }
+            html += '</div>';
+        }
+        html += '</details>';
+    }
+
+    html += '</div>';
+    $('#detail-content').insertAdjacentHTML('beforeend', html);
+}
+
+// ── Messages section ───────────────────────────────────────
+function renderMessagesSection(c) {
+    const messages = c.request_body_parsed && c.request_body_parsed.messages;
+    if (!messages) return;
+
+    const nonSys = messages.filter(m => m.role !== 'system');
+    if (!nonSys.length) {
+        $('#detail-content').insertAdjacentHTML('beforeend',
+            `<div class="section">
+                <div class="section-title">📨 Messages (0)</div>
+                <div style="color:var(--text-muted);font-size:13px;padding:12px;">No conversation messages</div>
+            </div>`);
+        return;
+    }
+
+    let html = `<div class="section">
+        <div class="section-title">📨 Messages (${nonSys.length})
+            <span class="toggle" onclick="toggleSection(this)">toggle</span>
+        </div>
+        <div class="message-list">`;
+
+    for (const msg of nonSys) {
+        const role = msg.role || 'unknown';
+        const rawContent = typeof msg.content === 'string'
+            ? msg.content
+            : (msg.content ? formatJSON(msg.content) : '(empty)');
+        const content = escapeHTML(rawContent);
+        const isLong = rawContent.length > 200;
+        const visible = isLong ? content.slice(0, 200) : content;
+        const isToolMsg = role === 'tool' || role === 'tool_call' || role === 'function';
+        const extraClass = isToolMsg ? ' message-tool' : '';
+
+        html += `<div class="message-item role-${role}${extraClass}">
+            <div class="message-header">
+                <span class="message-role">${role}</span>
+                ${msg.name ? '<span class="message-name">' + escapeHTML(msg.name) + '</span>' : ''}
+                ${msg.tool_call_id ? '<span class="message-name">' + escapeHTML(msg.tool_call_id) + '</span>' : ''}
+            </div>
+            <div class="message-content${isLong ? ' collapsed' : ''}">
+                ${visible}
+                ${isLong ? '<span class="expand-btn" onclick="this.parentElement.classList.toggle(\'collapsed\');this.textContent=this.parentElement.classList.contains(\'collapsed\')?\'… show more (\'+Math.round(rawContent.length/1000)+\'KB)\':\'\'">… show more (' + Math.round(rawContent.length / 1000) + 'KB)</span>' : ''}
+            </div>
+        </div>`;
+    }
+
+    html += '</div></div>';
+    $('#detail-content').insertAdjacentHTML('beforeend', html);
+}
+
+// ── Response section ───────────────────────────────────────
+function renderResponseSection(c) {
+    const extracted = extractResponseContent(c);
+    let bodyHTML = '';
+
+    if (extracted.type === 'empty') {
+        bodyHTML = '<div style="color:var(--text-muted);">(empty)</div>';
+    } else if (extracted.type === 'text') {
+        const mdContent = extracted.content || '(empty)';
+        const truncated = mdContent.length > 500000;
+        const toRender = truncated ? mdContent.slice(0, 500000) : mdContent;
+        let rendered;
+        try {
+            rendered = sanitizeHtml(marked.parse(toRender));
+        } catch (e) {
+            rendered = `<pre>${escapeHTML(toRender)}</pre>`;
+        }
+        bodyHTML = `<div class="response-markdown">${rendered}</div>`;
+        if (truncated) {
+            bodyHTML += `<div style="margin-top:8px;color:var(--accent-yellow);font-size:12px;">
+                Content truncated at 500KB.
+                <a href="#" onclick="this.closest('.section').querySelector('.toggle').click();return false;">View raw</a>
+            </div>`;
+        }
+        const meta = [];
+        if (extracted.finishReason) meta.push(`finish: ${extracted.finishReason}`);
+        if (extracted.model) meta.push(`model: ${extracted.model}`);
+        if (extracted.usage) {
+            const u = extracted.usage;
+            const inp = u.input_tokens || u.prompt_tokens || u.inputTokenCount;
+            const out = u.output_tokens || u.completion_tokens || u.candidatesTokenCount;
+            if (inp || out) meta.push(`tokens: ${inp || '?'} in / ${out || '?'} out`);
+        }
+        if (meta.length) {
+            bodyHTML += `<div class="response-meta">${meta.join(' · ')}</div>`;
+        }
+    } else {
+        bodyHTML = `<pre>${escapeHTML(formatJSON(extracted.json))}</pre>`;
+    }
+
+    const respRaw = `<pre>${escapeHTML(c.response_body_parsed ? formatJSON(c.response_body_parsed) : (c.response_body || '(empty)'))}</pre>`;
+
+    const html = `<div class="section">
+        <div class="section-title">📥 Response (${c.response_status || '…'})
+            <span class="toggle" onclick="toggleResponseView(this)">raw</span>
+        </div>
+        <div class="response-rendered code-block">${bodyHTML}</div>
+        <div class="code-block response-raw" style="display:none;">${respRaw}</div>
+    </div>`;
+
+    $('#detail-content').insertAdjacentHTML('beforeend', html);
+}
+
+function toggleResponseView(btn) {
+    const section = btn.closest('.section');
+    const rendered = section.querySelector('.response-rendered');
+    const raw = section.querySelector('.response-raw');
+    if (raw.style.display === 'none') {
+        rendered.style.display = 'none';
+        raw.style.display = 'block';
+        btn.textContent = 'rendered';
+    } else {
+        rendered.style.display = 'block';
+        raw.style.display = 'none';
+        btn.textContent = 'raw';
+    }
+}
+
+// ── Headers section ────────────────────────────────────────
+function renderHeadersSection(c) {
+    const html = `<div class="section">
+        <div class="section-title">📤 Request Headers
+            <span class="toggle" onclick="toggleSection(this)">toggle</span>
+        </div>
+        <div class="code-block"><pre>${escapeHTML(formatJSON(c.request_headers))}</pre></div>
+    </div>
+    <div class="section">
+        <div class="section-title">📥 Response Headers
+            <span class="toggle" onclick="toggleSection(this)">toggle</span>
+        </div>
+        <div class="code-block"><pre>${escapeHTML(formatJSON(c.response_headers))}</pre></div>
+    </div>`;
+
+    $('#detail-content').insertAdjacentHTML('beforeend', html);
+}
+
+// ── Utility ────────────────────────────────────────────────
+function toggleSection(btn) {
+    const block = btn.closest('.section').querySelector('.code-block');
+    if (block) block.classList.toggle('hide');
+}
+
+function toggleSysDiff(checkbox) {
+    const section = checkbox.closest('.section');
+    const textEl = section.querySelector('.sys-prompt-text');
+    const diffEl = section.querySelector('.sys-prompt-diff');
+    textEl.style.display = checkbox.checked ? 'none' : 'block';
+    diffEl.style.display = checkbox.checked ? 'block' : 'none';
+}
+
+function toggleRaw() {
+    if ($('#detail-content').classList.contains('raw-mode')) {
+        renderDetail();
+        $('#detail-content').classList.remove('raw-mode');
+    } else {
+        showRaw();
+    }
+}
+
+function showRaw() {
+    const c = state.selectedData;
+    if (!c) return;
+    const clone = {...c};
+    delete clone.request_body_parsed;
+    delete clone.response_body_parsed;
+    $('#detail-content').innerHTML = `<div class="code-block"><pre>${escapeHTML(formatJSON(clone))}</pre></div>`;
+    $('#detail-content').classList.add('raw-mode');
+}
+
+function filterByHostApiType(host, apiType) {
+    $('#filter-api-type').value = apiType;
+    $('#search').value = host;
+    fetchCaptures();
+}
+
+// ── Keyboard navigation ────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+
+    if (e.key === 'Escape') {
+        closeDetail();
+    }
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        const currentIdx = state.captures.findIndex(c => c.id === state.selectedId);
+        const nextIdx = e.key === 'ArrowDown'
+            ? Math.min(currentIdx + 1, state.captures.length - 1)
+            : Math.max(currentIdx - 1, 0);
+        if (state.captures[nextIdx]) {
+            selectCapture(state.captures[nextIdx].id);
+        }
+    }
+    if (e.key === 'r' && state.selectedId) {
+        e.preventDefault();
+        toggleRaw();
+    }
+});
+
+// ── Divider drag ───────────────────────────────────────────
+const divider = $('#divider');
+const detailPane = $('#detail-pane');
+
+divider.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    divider.classList.add('dragging');
+    const startX = e.clientX;
+    const startWidth = detailPane.offsetWidth;
+
+    const onMove = (ev) => {
+        const dx = startX - ev.clientX;
+        const newWidth = Math.min(Math.max(startWidth + dx, 300), window.innerWidth * 0.6);
+        detailPane.style.flex = '0 0 ' + newWidth + 'px';
+        detailPane.style.maxWidth = 'none';
+    };
+    const onUp = () => {
+        divider.classList.remove('dragging');
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+});
+
 // ── Filters ────────────────────────────────────────────────
-document.getElementById('filter-api-type').onchange = loadCaptures;
+$('#filter-api-type').onchange = () => { fetchCaptures(); };
 let searchTimer;
-document.getElementById('search').oninput = () => {
+$('#search').oninput = () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(loadCaptures, 300);
+    searchTimer = setTimeout(fetchCaptures, 300);
 };
 
 // ── Init ───────────────────────────────────────────────────
-loadCaptures();
+fetchCaptures();
 connectWS();
 </script>
 {% endblock %}
