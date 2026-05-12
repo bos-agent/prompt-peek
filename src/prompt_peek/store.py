@@ -94,22 +94,25 @@ class Store:
                request_body: Optional[str], response_status: Optional[int],
                response_headers: Optional[dict], response_body: Optional[str],
                api_type: str = "unknown", duration_ms: float = 0.0,
-               request_size: int = 0, response_size: int = 0) -> int:
+               request_size: int = 0, response_size: int = 0,
+               system_prompt_hash: Optional[str] = None) -> int:
         conn = self._get_conn()
         cur = conn.execute(
             """INSERT INTO captures
                (timestamp, method, url, host, path,
                 request_headers, request_body,
                 response_status, response_headers, response_body,
-                api_type, duration_ms, request_size, response_size)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                api_type, duration_ms, request_size, response_size,
+                system_prompt_hash)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (timestamp, method, url, host, path,
              json.dumps(request_headers or {}, ensure_ascii=False),
              request_body,
              response_status,
              json.dumps(response_headers or {}, ensure_ascii=False),
              response_body,
-             api_type, duration_ms, request_size, response_size),
+             api_type, duration_ms, request_size, response_size,
+             system_prompt_hash),
         )
         conn.commit()
         return cur.lastrowid
@@ -167,6 +170,46 @@ class Store:
         ).fetchone()
         return self._row_to_dict(row) if row else None
 
+    def get_previous_system_prompt(self, capture_id: int, host: str,
+                                   api_type: str) -> Optional[dict]:
+        conn = self._get_conn()
+        row = conn.execute(
+            """SELECT id, system_prompt_hash,
+                      json_extract(request_body, '$.messages') AS messages_json
+               FROM captures
+               WHERE host = ? AND api_type = ?
+                 AND id < ? AND system_prompt_hash IS NOT NULL
+               ORDER BY id DESC LIMIT 1""",
+            (host, api_type, capture_id),
+        ).fetchone()
+        if not row:
+            return None
+        content = None
+        try:
+            messages = json.loads(row["messages_json"])
+            for m in messages:
+                if m.get("role") == "system":
+                    content = m.get("content", "")
+                    break
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return {
+            "id": row["id"],
+            "hash": row["system_prompt_hash"],
+            "content": content,
+        }
+
+    def count_system_prompt_versions(self, host: str, api_type: str) -> int:
+        conn = self._get_conn()
+        row = conn.execute(
+            """SELECT COUNT(DISTINCT system_prompt_hash)
+               FROM captures
+               WHERE host = ? AND api_type = ?
+                 AND system_prompt_hash IS NOT NULL""",
+            (host, api_type),
+        ).fetchone()
+        return row[0] if row else 0
+
     def count(self, *, host: Optional[str] = None,
               api_type: Optional[str] = None,
               search: Optional[str] = None) -> int:
@@ -207,4 +250,5 @@ class Store:
             "duration_ms": row["duration_ms"],
             "request_size": row["request_size"],
             "response_size": row["response_size"],
+            "system_prompt_hash": row["system_prompt_hash"],
         }
