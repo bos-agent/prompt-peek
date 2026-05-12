@@ -26,13 +26,19 @@ CREATE TABLE IF NOT EXISTS captures (
     api_type    TEXT DEFAULT 'unknown',
     duration_ms REAL,
     request_size    INTEGER DEFAULT 0,
-    response_size   INTEGER DEFAULT 0
+    response_size   INTEGER DEFAULT 0,
+    system_prompt_hash TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_captures_timestamp ON captures (timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_captures_host      ON captures (host);
 CREATE INDEX IF NOT EXISTS idx_captures_api_type  ON captures (api_type);
 """
+
+MIGRATIONS = [
+    """ALTER TABLE captures ADD COLUMN system_prompt_hash TEXT""",
+    """CREATE INDEX IF NOT EXISTS idx_captures_sys_hash ON captures (system_prompt_hash)""",
+]
 
 
 class Store:
@@ -60,6 +66,11 @@ class Store:
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA foreign_keys=ON")
             conn.executescript(SCHEMA)
+            for migration in MIGRATIONS:
+                try:
+                    conn.execute(migration)
+                except sqlite3.OperationalError:
+                    pass
             conn.commit()
             self._local.conn = conn
             with self._conn_lock:
