@@ -1,0 +1,24 @@
+[project]
+name = "prompt-peek"
+version = "0.1.0"
+description = "Intercept and inspect LLM prompts from coding agents"
+requires-python = ">=3.10"
+authors = [{ name = "prompt-peek" }]
+
+dependencies = [
+    "mitmproxy>=9.0",
+    "fastapi",
+    "uvicorn",
+    "jinja2",
+    "aiosqlite",
+]
+
+[project.scripts]
+prompt-peek = "prompt_peek.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/prompt_peek"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,191 @@
+"""SQLite store for captured LLM API requests and responses."""
+
+import json
+import sqlite3
+import threading
+import time
+from pathlib import Path
+from typing import Optional, Any
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS captures (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   REAL NOT NULL,
+    method      TEXT NOT NULL,
+    url         TEXT NOT NULL,
+    host        TEXT NOT NULL,
+    path        TEXT NOT NULL,
+    request_headers  TEXT,   -- JSON
+    request_body     TEXT,   -- JSON string as-is (may be large)
+    response_status  INTEGER,
+    response_headers TEXT,   -- JSON
+    response_body    TEXT,   -- JSON string as-is (may be large)
+    api_type    TEXT DEFAULT 'unknown',
+    duration_ms REAL,
+    request_size    INTEGER DEFAULT 0,
+    response_size   INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_captures_timestamp ON captures (timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_captures_host      ON captures (host);
+CREATE INDEX IF NOT EXISTS idx_captures_api_type  ON captures (api_type);
+"""
+
+
+class Store:
+    """Thread-safe SQLite store for prompt captures.
+
+    Each calling thread gets its own SQLite connection (thread-local).
+    All connections use WAL mode so concurrent reads/writes across
+    threads are safe.  ``close()`` closes every connection.
+    """
+
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        self._local = threading.local()
+        self._all_connections: set[sqlite3.Connection] = set()
+        self._conn_lock = threading.Lock()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        """Return this thread's dedicated connection, creating one if needed."""
+        conn = getattr(self._local, 'conn', None)
+        if conn is None:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.executescript(SCHEMA)
+            conn.commit()
+            self._local.conn = conn
+            with self._conn_lock:
+                self._all_connections.add(conn)
+        return conn
+
+    def close(self):
+        """Close every connection opened by any thread."""
+        with self._conn_lock:
+            for conn in self._all_connections:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._all_connections.clear()
+
+    # ── write ──────────────────────────────────────────────────────
+
+    def insert(self, *, timestamp: float, method: str, url: str,
+               host: str, path: str, request_headers: dict,
+               request_body: Optional[str], response_status: Optional[int],
+               response_headers: Optional[dict], response_body: Optional[str],
+               api_type: str = "unknown", duration_ms: float = 0.0,
+               request_size: int = 0, response_size: int = 0) -> int:
+        conn = self._get_conn()
+        cur = conn.execute(
+            """INSERT INTO captures
+               (timestamp, method, url, host, path,
+                request_headers, request_body,
+                response_status, response_headers, response_body,
+                api_type, duration_ms, request_size, response_size)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (timestamp, method, url, host, path,
+             json.dumps(request_headers or {}, ensure_ascii=False),
+             request_body,
+             response_status,
+             json.dumps(response_headers or {}, ensure_ascii=False),
+             response_body,
+             api_type, duration_ms, request_size, response_size),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    def update_response(self, capture_id: int, *,
+                        response_status: int,
+                        response_headers: dict,
+                        response_body: Optional[str],
+                        duration_ms: float = 0.0,
+                        response_size: int = 0):
+        conn = self._get_conn()
+        conn.execute(
+            """UPDATE captures
+               SET response_status = ?, response_headers = ?, response_body = ?,
+                   duration_ms = ?, response_size = ?
+               WHERE id = ?""",
+            (response_status,
+             json.dumps(response_headers or {}, ensure_ascii=False),
+             response_body, duration_ms, response_size,
+             capture_id),
+        )
+        conn.commit()
+
+    # ── read ───────────────────────────────────────────────────────
+
+    def list_captures(self, *, limit: int = 50, offset: int = 0,
+                      host: Optional[str] = None,
+                      api_type: Optional[str] = None,
+                      search: Optional[str] = None) -> list[dict]:
+        conn = self._get_conn()
+        query = "SELECT * FROM captures WHERE 1=1"
+        params: list[Any] = []
+
+        if host:
+            query += " AND host = ?"
+            params.append(host)
+        if api_type:
+            query += " AND api_type = ?"
+            params.append(api_type)
+        if search:
+            query += " AND (url LIKE ? OR request_body LIKE ? OR response_body LIKE ?)"
+            pattern = f"%{search}%"
+            params.extend([pattern, pattern, pattern])
+
+        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        rows = conn.execute(query, params).fetchall()
+        return [self._row_to_dict(r) for r in rows]
+
+    def get_capture(self, capture_id: int) -> Optional[dict]:
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT * FROM captures WHERE id = ?", (capture_id,)
+        ).fetchone()
+        return self._row_to_dict(row) if row else None
+
+    def count(self, *, host: Optional[str] = None,
+              api_type: Optional[str] = None) -> int:
+        conn = self._get_conn()
+        query = "SELECT COUNT(*) FROM captures WHERE 1=1"
+        params: list[Any] = []
+        if host:
+            query += " AND host = ?"
+            params.append(host)
+        if api_type:
+            query += " AND api_type = ?"
+            params.append(api_type)
+        return conn.execute(query, params).fetchone()[0]
+
+    def delete(self, capture_id: int):
+        conn = self._get_conn()
+        conn.execute("DELETE FROM captures WHERE id = ?", (capture_id,))
+        conn.commit()
+
+    def _row_to_dict(self, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "timestamp": row["timestamp"],
+            "method": row["method"],
+            "url": row["url"],
+            "host": row["host"],
+            "path": row["path"],
+            "request_headers": row["request_headers"],
+            "request_body": row["request_body"],
+            "response_status": row["response_status"],
+            "response_headers": row["response_headers"],
+            "response_body": row["response_body"],
+            "api_type": row["api_type"],
+            "duration_ms": row["duration_ms"],
+            "request_size": row["request_size"],
+            "response_size": row["response_size"],
+        }

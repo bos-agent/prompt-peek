@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Raw #{{ capture_id }} · prompt-peek{% endblock %}
+
+{% block content %}
+<a href="/capture/{{ capture_id }}" class="back-link">← Back to capture</a>
+
+<div class="raw-tabs">
+    <div class="raw-tab active" onclick="switchTab('request')">Request Body</div>
+    <div class="raw-tab"        onclick="switchTab('response')">Response Body</div>
+</div>
+
+<div class="code-block">
+    <pre id="raw-content" style="max-height:80vh;overflow-y:auto;">Loading…</pre>
+</div>
+
+<script>
+const captureId = {{ capture_id }};
+
+async function load() {
+    const res  = await fetch('/api/captures/' + captureId);
+    const data = await res.json();
+    const c    = data.capture;
+    if (!c) { document.getElementById('raw-content').textContent = 'Not found.'; return; }
+
+    window._reqBody  = c.request_body  || '(empty)';
+    window._respBody = c.response_body || '(empty)';
+
+    // Try to pretty-print
+    try { window._reqBody  = JSON.stringify(JSON.parse(window._reqBody), null, 2); } catch(e) {}
+    try { window._respBody = JSON.stringify(JSON.parse(window._respBody), null, 2); } catch(e) {}
+
+    switchTab('request');
+}
+
+function switchTab(tab) {
+    document.querySelectorAll('.raw-tab').forEach(t => t.classList.toggle('active', t.textContent.toLowerCase().includes(tab)));
+    const el = document.getElementById('raw-content');
+    el.textContent = tab === 'request' ? window._reqBody : window._respBody;
+}
+
+load();
+</script>
+{% endblock %}
