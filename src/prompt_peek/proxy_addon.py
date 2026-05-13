@@ -19,6 +19,36 @@ logger = logging.getLogger(__name__)
 _EVENT_QUEUE_CAP = 5000
 
 
+def _extract_system_prompt_text(body: dict) -> Optional[str]:
+    """Extract canonical system prompt text from a parsed request body.
+
+    Handles both Anthropic (top-level ``system``) and OpenAI
+    (``role: "system"`` inside ``messages``) formats, returning a
+    single string that is used for hashing, comparison, and display.
+    """
+    # Anthropic format: top-level "system" (string or content-block array)
+    sys_field = body.get("system")
+    if isinstance(sys_field, str):
+        return sys_field
+    if isinstance(sys_field, list):
+        parts = []
+        for block in sys_field:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text", "")
+                if not text.startswith("x-anthropic-billing-header:"):
+                    parts.append(text)
+        return "\n--\n".join(parts) if parts else None
+
+    # OpenAI format: role="system" inside messages
+    for m in body.get("messages", []):
+        if isinstance(m, dict) and m.get("role") == "system":
+            content = m.get("content", "")
+            if isinstance(content, str):
+                return content
+            break
+    return None
+
+
 class EventBus:
     """Thread-safe ring-buffer queue for notifying the web server of new captures.
 
@@ -64,9 +94,7 @@ class PromptPeekAddon:
 
     def _matches_api(self, path: str) -> bool:
         for pattern in self.config.api_patterns:
-            # Match as a path prefix so /v1/chat/completions
-            # doesn't accidentally match /fake/v1/chat/completions.
-            if path == pattern or path.startswith(pattern + "/") or path.startswith(pattern + "?"):
+            if pattern in path:
                 return True
         return False
 
@@ -87,6 +115,8 @@ class PromptPeekAddon:
     # ── mitmproxy hooks ─────────────────────────────────────────
 
     def request(self, flow: http.HTTPFlow) -> None:
+        logger.info("DEBUG request: host=%s path=%s method=%s",
+                    flow.request.host, flow.request.path, flow.request.method)
         if not self._matches_api(flow.request.path):
             return
 
@@ -104,15 +134,11 @@ class PromptPeekAddon:
         # Compute system_prompt_hash
         system_prompt_hash = None
         if body_json and isinstance(body_json, dict):
-            messages = body_json.get("messages", [])
-            for m in messages:
-                if isinstance(m, dict) and m.get("role") == "system":
-                    content = m.get("content", "")
-                    if isinstance(content, str):
-                        system_prompt_hash = hashlib.sha256(
-                            content.encode("utf-8")
-                        ).hexdigest()[:16]
-                    break
+            sys_text = _extract_system_prompt_text(body_json)
+            if sys_text:
+                system_prompt_hash = hashlib.sha256(
+                    sys_text.encode("utf-8")
+                ).hexdigest()[:16]
 
         capture_id = self.store.insert(
             timestamp=time.time(),

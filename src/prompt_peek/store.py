@@ -170,27 +170,22 @@ class Store:
         ).fetchone()
         return self._row_to_dict(row) if row else None
 
-    def get_previous_system_prompt(self, capture_id: int, host: str,
-                                   api_type: str) -> Optional[dict]:
+    def get_previous_system_prompt(self, capture_id: int) -> Optional[dict]:
         conn = self._get_conn()
         row = conn.execute(
-            """SELECT id, system_prompt_hash,
-                      json_extract(request_body, '$.messages') AS messages_json
+            """SELECT id, system_prompt_hash, request_body
                FROM captures
-               WHERE host = ? AND api_type = ?
-                 AND id < ? AND system_prompt_hash IS NOT NULL
+               WHERE id < ? AND system_prompt_hash IS NOT NULL
                ORDER BY id DESC LIMIT 1""",
-            (host, api_type, capture_id),
+            (capture_id,),
         ).fetchone()
         if not row:
             return None
         content = None
         try:
-            messages = json.loads(row["messages_json"])
-            for m in messages:
-                if m.get("role") == "system":
-                    content = m.get("content", "")
-                    break
+            from prompt_peek.proxy_addon import _extract_system_prompt_text
+            body = json.loads(row["request_body"])
+            content = _extract_system_prompt_text(body)
         except (json.JSONDecodeError, TypeError):
             pass
         return {
@@ -199,14 +194,12 @@ class Store:
             "content": content,
         }
 
-    def count_system_prompt_versions(self, host: str, api_type: str) -> int:
+    def count_system_prompt_versions(self) -> int:
         conn = self._get_conn()
         row = conn.execute(
             """SELECT COUNT(DISTINCT system_prompt_hash)
                FROM captures
-               WHERE host = ? AND api_type = ?
-                 AND system_prompt_hash IS NOT NULL""",
-            (host, api_type),
+               WHERE system_prompt_hash IS NOT NULL""",
         ).fetchone()
         return row[0] if row else 0
 

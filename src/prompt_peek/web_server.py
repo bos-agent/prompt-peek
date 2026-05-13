@@ -174,16 +174,13 @@ async def api_sys_prompt_previous(request: Request, capture_id: int):
     if capture is None:
         return {"previous": None, "changed": False, "total_versions": 0}
 
-    host = capture.get("host", "")
-    api_type = capture.get("api_type", "")
-
     previous = await loop.run_in_executor(
         None,
-        lambda: store.get_previous_system_prompt(capture_id, host, api_type),
+        lambda: store.get_previous_system_prompt(capture_id),
     )
     total = await loop.run_in_executor(
         None,
-        lambda: store.count_system_prompt_versions(host, api_type),
+        lambda: store.count_system_prompt_versions(),
     )
 
     current_hash = capture.get("system_prompt_hash")

@@ -1,4 +1,5 @@
 .deepseek/
+.claude/
 data/
 
 # Byte-compiled / optimized / DLL files

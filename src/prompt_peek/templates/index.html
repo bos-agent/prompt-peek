@@ -226,69 +226,151 @@ function closeDetail() {
 }
 
 // ── Content extraction ─────────────────────────────────────
-function extractSysPrompt(messages) {
+function extractSysPrompt(body) {
+    if (!body) return null;
+    // Anthropic format: top-level "system" field (string or content-block array)
+    const sys = body.system;
+    if (typeof sys === 'string') return sys;
+    if (Array.isArray(sys)) {
+        const parts = sys.filter(b => b.type === 'text' && !(b.text || '').startsWith('x-anthropic-billing-header:')).map(b => b.text || '');
+        return parts.length ? parts.join('\n--\n') : null;
+    }
+    // OpenAI format: role="system" inside messages array
+    const messages = body.messages;
     if (!messages) return null;
-    const sys = messages.find(m => m.role === 'system');
-    if (!sys) return null;
-    return typeof sys.content === 'string' ? sys.content : formatJSON(sys.content);
+    const sysMsg = messages.find(m => m.role === 'system');
+    if (!sysMsg) return null;
+    return typeof sysMsg.content === 'string' ? sysMsg.content : formatJSON(sysMsg.content);
 }
 
 function extractResponseContent(c) {
     const body = c.response_body_parsed;
-    if (!body) return { type: 'empty' };
+    const rawBody = c.response_body;
+    if (!body && !rawBody) return { type: 'empty' };
 
-    if (c.api_type === 'openai' && body.choices) {
-        const msg = body.choices[0]?.message;
-        return {
-            type: 'text',
-            content: msg?.content || '',
-            finishReason: body.choices[0]?.finish_reason,
-            model: body.model,
-            usage: body.usage,
-            toolCalls: msg?.tool_calls,
-        };
+    // Non-streaming paths
+    if (body) {
+        if (c.api_type === 'openai' && body.choices) {
+            const msg = body.choices[0]?.message;
+            return {
+                type: 'text',
+                content: msg?.content || '',
+                finishReason: body.choices[0]?.finish_reason,
+                model: body.model,
+                usage: body.usage,
+                toolCalls: msg?.tool_calls,
+            };
+        }
+        if (c.api_type === 'anthropic' && !Array.isArray(body)) {
+            const textParts = (body.content || []).filter(p => p.type === 'text');
+            const toolParts = (body.content || []).filter(p => p.type === 'tool_use');
+            return {
+                type: 'text',
+                content: textParts.map(p => p.text).join('\n'),
+                finishReason: body.stop_reason,
+                model: body.model,
+                usage: body.usage,
+                toolCalls: toolParts,
+            };
+        }
     }
-    if (c.api_type === 'anthropic') {
-        const textParts = (body.content || []).filter(p => p.type === 'text');
-        const toolParts = (body.content || []).filter(p => p.type === 'tool_use');
-        return {
-            type: 'text',
-            content: textParts.map(p => p.text).join('\n'),
-            finishReason: body.stop_reason,
-            model: body.model,
-            usage: body.usage,
-            toolCalls: toolParts,
-        };
+
+    // SSE stream: rawBody is text/event-stream; parse "data:" lines
+    if (typeof rawBody === 'string' && /^data:\s*\{/m.test(rawBody)) {
+        return parseSSEStream(rawBody, c.api_type);
     }
-    if (c.api_type === 'google' && body.candidates) {
-        const parts = (body.candidates[0]?.content?.parts || []).map(p => p.text || '').join('\n');
-        return {
-            type: 'text',
-            content: parts,
-            finishReason: body.candidates[0]?.finishReason,
-            model: body.modelVersion,
-            usage: body.usageMetadata,
-        };
+
+    // Parsed body is an array of SSE event objects
+    if (Array.isArray(body) && body.length) {
+        return parseSSEArray(body, c.api_type);
     }
-    return { type: 'json', json: body };
+
+    if (body) return { type: 'json', json: body };
+    return { type: 'text', content: rawBody || '' };
+}
+
+function parseSSEStream(raw, apiType) {
+    const events = [];
+    for (const line of raw.split(/\r?\n/)) {
+        const m = line.match(/^data:\s*(.+)/);
+        if (m) {
+            try { events.push(JSON.parse(m[1])); } catch (e) {}
+        }
+    }
+    return parseSSEArray(events, apiType);
+}
+
+function parseSSEArray(events, apiType) {
+    let content = '';
+    let finishReason = null;
+    let model = null;
+    let usage = null;
+
+    for (const ev of events) {
+        // OpenAI streaming: choices[0].delta.content
+        if (ev.choices) {
+            const delta = ev.choices[0]?.delta;
+            if (delta?.content) content += delta.content;
+            if (ev.choices[0]?.finish_reason) finishReason = ev.choices[0].finish_reason;
+            if (ev.model) model = ev.model;
+            if (ev.usage) usage = ev.usage;
+        }
+        // Anthropic streaming
+        if (ev.type === 'content_block_delta' && ev.delta?.text) {
+            content += ev.delta.text;
+        }
+        if (ev.type === 'content_block_start' && ev.content_block?.text) {
+            content += ev.content_block.text;
+        }
+        if (ev.type === 'message_delta') {
+            if (ev.delta?.stop_reason) finishReason = ev.delta.stop_reason;
+            if (ev.usage) usage = ev.usage;
+        }
+        if (ev.type === 'message_start' && ev.message?.model) {
+            model = ev.message.model;
+        }
+    }
+
+    return {
+        type: 'text',
+        content: content || null,
+        finishReason,
+        model,
+        usage,
+    };
 }
 
 // ── Simple line diff ───────────────────────────────────────
 function lineDiff(oldText, newText) {
     const oldLines = (oldText || '').split('\n');
     const newLines = (newText || '').split('\n');
+    const m = oldLines.length, n = newLines.length;
+
+    // LCS table
+    const dp = Array.from({ length: m + 1 }, () => new Uint16Array(n + 1));
+    for (let i = 1; i <= m; i++) {
+        for (let j = 1; j <= n; j++) {
+            if (oldLines[i - 1] === newLines[j - 1]) {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+            }
+        }
+    }
+
+    // Backtrack
     const result = [];
-    let oi = 0, ni = 0;
-    while (oi < oldLines.length || ni < newLines.length) {
-        if (oi < oldLines.length && ni < newLines.length && oldLines[oi] === newLines[ni]) {
-            result.push({ type: 'same', text: oldLines[oi] });
-            oi++; ni++;
-        } else if (ni < newLines.length) {
-            result.push({ type: 'add', text: newLines[ni] });
-            ni++;
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+        if (i > 0 && j > 0 && oldLines[i - 1] === newLines[j - 1]) {
+            result.unshift({ type: 'same', text: oldLines[i - 1] });
+            i--; j--;
+        } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+            result.unshift({ type: 'add', text: newLines[j - 1] });
+            j--;
         } else {
-            result.push({ type: 'remove', text: oldLines[oi] });
-            oi++;
+            result.unshift({ type: 'remove', text: oldLines[i - 1] });
+            i--;
         }
     }
     return result;
@@ -343,22 +425,25 @@ async function renderDetail() {
 
     // System Prompt
     const sysContent = c.request_body_parsed
-        ? extractSysPrompt(c.request_body_parsed.messages) : null;
+        ? extractSysPrompt(c.request_body_parsed) : null;
     if (sysContent) {
         const prev = await fetchSysPromptPrevious(c.id);
         const changed = prev && prev.changed;
+        const isUnchanged = prev && prev.previous && !changed;
         const badgeClass = changed ? 'badge-changed' : 'badge-unchanged';
         const badgeText = changed
             ? `changed vs #${prev.previous.id}`
             : (prev.previous ? `unchanged vs #${prev.previous.id}` : 'first seen');
+        const bodyClass = isUnchanged ? 'sys-prompt-body code-block hide' : 'sys-prompt-body code-block';
+        const toggleText = isUnchanged ? 'show' : 'hide';
 
         html += `<div class="section">
             <div class="section-title">
                 ⚙ System Prompt
                 <span class="badge ${badgeClass}">${badgeText}</span>
-                <span class="toggle" onclick="toggleSection(this)">toggle</span>
+                <span class="toggle" onclick="toggleSection(this)">${toggleText}</span>
             </div>
-            <div class="sys-prompt-body code-block">
+            <div class="${bodyClass}">
                 <pre class="sys-prompt-text">${escapeHTML(sysContent)}</pre>
                 <pre class="sys-prompt-diff" style="display:none;">${prev && prev.previous ? renderDiff(prev.previous.content, sysContent) : ''}</pre>
             </div>`;
@@ -396,46 +481,50 @@ function renderToolsSection(c) {
     if (!tools || !tools.length) return;
 
     let html = `<div class="section">
-        <div class="section-title">🔧 Tools (${tools.length})
-            <span class="toggle" onclick="toggleSection(this)">toggle</span>
-        </div>`;
+        <div class="section-title">🔧 Tools (${tools.length})</div>`;
 
     // Tag cloud
     html += '<div class="tool-tags">';
     for (const t of tools) {
         const name = t.name || (t.function && t.function.name) || '(unnamed)';
         const cat = categorizeTool(name);
-        html += `<span class="tool-tag ${cat}" onclick="document.getElementById('tool-${CSS.escape(name)}').scrollIntoView({behavior:'smooth'});this.closest('.section').querySelectorAll('details').forEach(d=>d.open=true)">${escapeHTML(name)}</span>`;
+        html += `<span class="tool-tag ${cat}" onclick="event.stopPropagation();showToolModal(this)" data-tool='${escapeAttr(JSON.stringify({name, desc: t.description || (t.function && t.function.description) || '', schema: t.input_schema || (t.function && t.function.parameters) || null}))}'>${escapeHTML(name)}</span>`;
     }
     html += '</div>';
-
-    // Tool cards
-    for (const t of tools) {
-        const name = t.name || (t.function && t.function.name) || '(unnamed)';
-        const desc = t.description || (t.function && t.function.description) || '';
-        const schema = t.input_schema || (t.function && t.function.parameters) || null;
-        const required = (schema && schema.required) || [];
-        const props = (schema && schema.properties) || {};
-
-        html += `<details class="tool-card" id="tool-${CSS.escape(name)}">
-            <summary>${escapeHTML(name)}</summary>
-            <div class="tool-desc">${escapeHTML(desc)}</div>`;
-        if (Object.keys(props).length) {
-            html += '<div class="tool-params">';
-            for (const [pname, pinfo] of Object.entries(props)) {
-                const req = required.includes(pname) ? ' <span class="param-required">required</span>' : '';
-                html += `<span class="tool-param">${escapeHTML(pname)}${req} <span class="param-type">${escapeHTML(pinfo.type || 'any')}</span></span>`;
-            }
-            html += '</div>';
-        }
-        html += '</details>';
-    }
 
     html += '</div>';
     $('#detail-content').insertAdjacentHTML('beforeend', html);
 }
 
 // ── Messages section ───────────────────────────────────────
+function extractMessageText(msg) {
+    const c = msg.content;
+    if (typeof c === 'string') return c;
+    if (Array.isArray(c)) {
+        const parts = c.filter(b => b.type === 'text' || b.type === 'tool_result').map(b => {
+            if (b.type === 'tool_result') return b.content || '';
+            return b.text || b.content || '';
+        });
+        return parts.length ? parts.join('\n--\n') : '';
+    }
+    return c ? formatJSON(c) : '';
+}
+
+function getMessageType(msg) {
+    const role = msg.role || '';
+    if (role === 'tool' || role === 'function') return 'TOOL_RESULT';
+    if (Array.isArray(msg.content)) {
+        const types = msg.content.map(b => b.type);
+        if (types.includes('tool_use')) return 'TOOL_CALL';
+        if (types.includes('thinking')) return 'THINKING';
+        if (types.includes('tool_result')) return 'TOOL_RESULT';
+        return types[0]?.toUpperCase() || '';
+    }
+    if (msg.tool_calls) return 'TOOL_CALL';
+    if (msg.tool_call_id) return 'TOOL_RESULT';
+    return '';
+}
+
 function renderMessagesSection(c) {
     const messages = c.request_body_parsed && c.request_body_parsed.messages;
     if (!messages) return;
@@ -450,33 +539,25 @@ function renderMessagesSection(c) {
         return;
     }
 
+    const shown = nonSys.slice(-3);
+    const hidden = nonSys.length - shown.length;
+
     let html = `<div class="section">
-        <div class="section-title">📨 Messages (${nonSys.length})
-            <span class="toggle" onclick="toggleSection(this)">toggle</span>
-        </div>
+        <div class="section-title">📨 Messages (${nonSys.length})</div>
+        ${hidden > 0 ? `<div style="font-size:12px;color:var(--text-muted);padding:4px 0 8px;">Showing last 3 of ${nonSys.length} messages</div>` : ''}
         <div class="message-list">`;
 
-    for (const msg of nonSys) {
+    for (const msg of shown) {
         const role = msg.role || 'unknown';
-        const rawContent = typeof msg.content === 'string'
-            ? msg.content
-            : (msg.content ? formatJSON(msg.content) : '(empty)');
-        const content = escapeHTML(rawContent);
-        const isLong = rawContent.length > 200;
-        const visible = isLong ? content.slice(0, 200) : content;
-        const isToolMsg = role === 'tool' || role === 'tool_call' || role === 'function';
-        const extraClass = isToolMsg ? ' message-tool' : '';
+        const mtype = getMessageType(msg);
+        const fullText = extractMessageText(msg);
+        const oneLine = fullText.replace(/\n/g, ' ').slice(0, 120);
+        const suffix = fullText.length > 120 ? '…' : '';
 
-        html += `<div class="message-item role-${role}${extraClass}">
-            <div class="message-header">
-                <span class="message-role">${role}</span>
-                ${msg.name ? '<span class="message-name">' + escapeHTML(msg.name) + '</span>' : ''}
-                ${msg.tool_call_id ? '<span class="message-name">' + escapeHTML(msg.tool_call_id) + '</span>' : ''}
-            </div>
-            <div class="message-content${isLong ? ' collapsed' : ''}">
-                ${visible}
-                ${isLong ? '<span class="expand-btn" onclick="this.parentElement.classList.toggle(\'collapsed\');this.textContent=this.parentElement.classList.contains(\'collapsed\')?\'… show more (\'+Math.round(rawContent.length/1000)+\'KB)\':\'\'">… show more (' + Math.round(rawContent.length / 1000) + 'KB)</span>' : ''}
-            </div>
+        html += `<div class="message-row role-${role}" onclick="showMessageModal(this)" data-message='${escapeAttr(JSON.stringify({role, type: mtype, content: fullText}))}'>
+            <span class="msg-role">${role.toUpperCase()}</span>
+            ${mtype ? '<span class="msg-type-tag">' + escapeHTML(mtype) + '</span>' : ''}
+            <span class="msg-preview">${escapeHTML(oneLine)}${suffix}</span>
         </div>`;
     }
 
@@ -524,47 +605,29 @@ function renderResponseSection(c) {
         bodyHTML = `<pre>${escapeHTML(formatJSON(extracted.json))}</pre>`;
     }
 
-    const respRaw = `<pre>${escapeHTML(c.response_body_parsed ? formatJSON(c.response_body_parsed) : (c.response_body || '(empty)'))}</pre>`;
-
     const html = `<div class="section">
-        <div class="section-title">📥 Response (${c.response_status || '…'})
-            <span class="toggle" onclick="toggleResponseView(this)">raw</span>
-        </div>
+        <div class="section-title">📥 Response (${c.response_status || '…'})</div>
         <div class="response-rendered code-block">${bodyHTML}</div>
-        <div class="code-block response-raw" style="display:none;">${respRaw}</div>
     </div>`;
 
     $('#detail-content').insertAdjacentHTML('beforeend', html);
 }
 
-function toggleResponseView(btn) {
-    const section = btn.closest('.section');
-    const rendered = section.querySelector('.response-rendered');
-    const raw = section.querySelector('.response-raw');
-    if (raw.style.display === 'none') {
-        rendered.style.display = 'none';
-        raw.style.display = 'block';
-        btn.textContent = 'rendered';
-    } else {
-        rendered.style.display = 'block';
-        raw.style.display = 'none';
-        btn.textContent = 'raw';
-    }
-}
+
 
 // ── Headers section ────────────────────────────────────────
 function renderHeadersSection(c) {
     const html = `<div class="section">
         <div class="section-title">📤 Request Headers
-            <span class="toggle" onclick="toggleSection(this)">toggle</span>
+            <span class="toggle" onclick="toggleSection(this)">show</span>
         </div>
-        <div class="code-block"><pre>${escapeHTML(formatJSON(c.request_headers))}</pre></div>
+        <div class="code-block hide"><pre>${escapeHTML(formatJSON(c.request_headers))}</pre></div>
     </div>
     <div class="section">
         <div class="section-title">📥 Response Headers
-            <span class="toggle" onclick="toggleSection(this)">toggle</span>
+            <span class="toggle" onclick="toggleSection(this)">show</span>
         </div>
-        <div class="code-block"><pre>${escapeHTML(formatJSON(c.response_headers))}</pre></div>
+        <div class="code-block hide"><pre>${escapeHTML(formatJSON(c.response_headers))}</pre></div>
     </div>`;
 
     $('#detail-content').insertAdjacentHTML('beforeend', html);
@@ -572,8 +635,12 @@ function renderHeadersSection(c) {
 
 // ── Utility ────────────────────────────────────────────────
 function toggleSection(btn) {
-    const block = btn.closest('.section').querySelector('.code-block');
-    if (block) block.classList.toggle('hide');
+    const section = btn.closest('.section');
+    const block = section.querySelector('.code-block') || section.querySelector('.message-list') || section.querySelector('.tool-tags');
+    if (block) {
+        block.classList.toggle('hide');
+        btn.textContent = block.classList.contains('hide') ? 'show' : 'hide';
+    }
 }
 
 function toggleSysDiff(checkbox) {

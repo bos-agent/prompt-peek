@@ -255,8 +255,17 @@ a:hover { text-decoration: underline; }
 }
 .section-title .toggle {
     cursor: pointer;
-    color: var(--text-muted);
-    font-size: 12px;
+    color: var(--accent);
+    font-size: 11px;
+    padding: 1px 8px;
+    border-radius: 4px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    user-select: none;
+}
+.section-title .toggle:hover {
+    color: #fff;
+    background: var(--accent);
 }
 
 .code-block {
@@ -278,51 +287,87 @@ a:hover { text-decoration: underline; }
 
 /* ── prompt structure viewer ─────────────────────────────── */
 
+/* ── message rows ─────────────────────────────────────────── */
 .message-list { list-style: none; }
 
-.message-item {
-    background: var(--bg-tertiary);
-    border-left: 3px solid var(--accent);
-    border-radius: 0 var(--radius) var(--radius) 0;
-    padding: 12px 16px;
-    margin-bottom: 8px;
-}
-.message-item.role-system    { border-left-color: #f85149; }
-.message-item.role-user      { border-left-color: #58a6ff; }
-.message-item.role-assistant { border-left-color: #3fb950; }
-.message-item.role-tool      { border-left-color: #d2991d; }
-
-.message-header {
+.message-row {
     display: flex;
-    align-items: center;
     gap: 8px;
-    margin-bottom: 6px;
-}
-.message-role {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    padding: 1px 8px;
+    align-items: baseline;
+    padding: 4px 8px;
+    margin-bottom: 2px;
     border-radius: 4px;
-}
-.role-system    .message-role { background: #3d1f1f; color: #f85149; }
-.role-user      .message-role { background: #1a3a5c; color: #58a6ff; }
-.role-assistant .message-role { background: #1a3a2a; color: #3fb950; }
-.role-tool      .message-role { background: #3a2e1a; color: #d2991d; }
-.message-name   { font-size: 12px; color: var(--text-muted); }
-.message-content {
-    font-size: 13px;
-    color: var(--text);
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-.message-content.collapsed { max-height: 200px; overflow: hidden; }
-.message-content .expand-btn {
-    display: block;
-    margin-top: 4px;
-    color: var(--accent);
     cursor: pointer;
     font-size: 12px;
+    border-left: 3px solid transparent;
+}
+.message-row:hover { background: var(--bg-tertiary); }
+.message-row.role-system    { border-left-color: #f85149; }
+.message-row.role-user      { border-left-color: #58a6ff; }
+.message-row.role-assistant { border-left-color: #3fb950; }
+.message-row.role-tool      { border-left-color: #d2991d; }
+
+.msg-role {
+    text-transform: uppercase;
+    font-weight: 600;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    min-width: 56px;
+    text-align: center;
+}
+.role-system    .msg-role { background: #3d1f1f; color: #f85149; }
+.role-user      .msg-role { background: #1a3a5c; color: #58a6ff; }
+.role-assistant .msg-role { background: #1a3a2a; color: #3fb950; }
+.role-tool      .msg-role { background: #3a2e1a; color: #d2991d; }
+
+.msg-type-tag {
+    font-size: 10px;
+    font-family: var(--font-mono);
+    color: var(--accent);
+    background: var(--bg-tertiary);
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.msg-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.msg-preview {
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex: 1;
+}
+
+/* message modal role badges */
+.msg-role-badge {
+    text-transform: uppercase;
+    font-weight: 600;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    padding: 2px 8px;
+    border-radius: 4px;
+    vertical-align: middle;
+}
+.msg-role-badge.role-system    { background: #3d1f1f; color: #f85149; }
+.msg-role-badge.role-user      { background: #1a3a5c; color: #58a6ff; }
+.msg-role-badge.role-assistant { background: #1a3a2a; color: #3fb950; }
+.msg-role-badge.role-tool      { background: #3a2e1a; color: #d2991d; }
+.msg-label-badge {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: 8px;
+    vertical-align: middle;
 }
 
 /* ── selected capture ──────────────────────────────────── */
@@ -437,6 +482,54 @@ a:hover { text-decoration: underline; }
 }
 .param-type { color: var(--text-muted); }
 .param-required { color: var(--accent-red); font-size: 10px; }
+
+/* ── tool modal ───────────────────────────────────────── */
+.tool-modal-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0,0,0,0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tool-modal {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 20px 24px;
+    max-width: 720px;
+    max-height: 80vh;
+    overflow-y: auto;
+    width: 90%;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+}
+.tool-modal-header {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--accent);
+    margin-bottom: 8px;
+}
+.tool-modal-desc {
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.6;
+    margin-bottom: 12px;
+    white-space: pre-wrap;
+}
+.tool-modal-params {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+.tool-modal-param {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    background: var(--bg-tertiary);
+    padding: 2px 8px;
+    border-radius: 4px;
+}
 
 /* ── response markdown ───────────────────────────────────── */
 .response-markdown { font-size: 13px; line-height: 1.6; }
