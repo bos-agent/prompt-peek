@@ -143,21 +143,41 @@ class Store:
                       api_type: Optional[str] = None,
                       search: Optional[str] = None) -> list[dict]:
         conn = self._get_conn()
-        query = "SELECT * FROM captures WHERE 1=1"
+
+        # Build the base WHERE clause
+        where = "1=1"
         params: list[Any] = []
 
         if host:
-            query += " AND host = ?"
+            where += " AND host = ?"
             params.append(host)
         if api_type:
-            query += " AND api_type = ?"
+            where += " AND api_type = ?"
             params.append(api_type)
         if search:
-            query += " AND (url LIKE ? OR request_body LIKE ? OR response_body LIKE ?)"
+            where += " AND (url LIKE ? OR request_body LIKE ? OR response_body LIKE ?)"
             pattern = f"%{search}%"
             params.extend([pattern, pattern, pattern])
 
-        query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
+        # Use a CTE to annotate each row with system-prompt change info.
+        # Window functions operate over the filtered set (before LIMIT/OFFSET)
+        # so prev/next comparisons are correct regardless of pagination.
+        query = f"""
+            WITH base AS (
+                SELECT * FROM captures WHERE {where}
+            ),
+            annotated AS (
+                SELECT
+                    base.*,
+                    LAG(base.system_prompt_hash) OVER w AS prev_sys_hash,
+                    ROW_NUMBER() OVER (PARTITION BY base.system_prompt_hash ORDER BY base.timestamp ASC) AS sys_hash_occurrence
+                FROM base
+                WINDOW w AS (ORDER BY base.timestamp ASC)
+            )
+            SELECT * FROM annotated
+            ORDER BY timestamp DESC
+            LIMIT ? OFFSET ?
+        """
         params.extend([limit, offset])
 
         rows = conn.execute(query, params).fetchall()
@@ -227,6 +247,8 @@ class Store:
         conn.commit()
 
     def _row_to_dict(self, row: sqlite3.Row) -> dict:
+        row_keys = row.keys()
+        has_window = "sys_hash_occurrence" in row_keys
         return {
             "id": row["id"],
             "timestamp": row["timestamp"],
@@ -244,4 +266,10 @@ class Store:
             "request_size": row["request_size"],
             "response_size": row["response_size"],
             "system_prompt_hash": row["system_prompt_hash"],
+            "sys_prompt_first": bool(row["sys_hash_occurrence"] == 1 and row["system_prompt_hash"]) if has_window else None,
+            "sys_prompt_changed": bool(
+                row["system_prompt_hash"] is not None
+                and row["prev_sys_hash"] is not None
+                and row["system_prompt_hash"] != row["prev_sys_hash"]
+            ) if has_window else None,
         }

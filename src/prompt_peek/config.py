@@ -42,7 +42,7 @@ class Config:
 
     # LLM API endpoint patterns to capture (path fragments)
     api_patterns: list[str] = field(default_factory=lambda: [
-        "/v1/chat/completions",      # OpenAI, many proxies
+        "/chat/completions",          # OpenAI, DeepSeek, many providers
         "/v1/messages",               # Anthropic
         "/v1beta/models/",            # Google AI
         "/openai/deployments/",       # Azure OpenAI

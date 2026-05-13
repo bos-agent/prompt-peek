@@ -39,12 +39,29 @@ def _extract_system_prompt_text(body: dict) -> Optional[str]:
                     parts.append(text)
         return "\n--\n".join(parts) if parts else None
 
+    # Google format: top-level "system_instruction" or "systemInstruction"
+    sys_inst = body.get("system_instruction") or body.get("systemInstruction")
+    if sys_inst and isinstance(sys_inst, dict):
+        parts = sys_inst.get("parts", [])
+        if isinstance(parts, list):
+            text_parts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
+            if text_parts:
+                return "\n--\n".join(text_parts)
+
     # OpenAI format: role="system" inside messages
     for m in body.get("messages", []):
         if isinstance(m, dict) and m.get("role") == "system":
             content = m.get("content", "")
             if isinstance(content, str):
                 return content
+            if isinstance(content, list):
+                text_parts = [
+                    p.get("text", "")
+                    for p in content
+                    if isinstance(p, dict) and p.get("type") == "text" and p.get("text")
+                ]
+                if text_parts:
+                    return "\n".join(text_parts)
             break
     return None
 
