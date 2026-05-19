@@ -19,6 +19,11 @@
             <span class="count" id="count">0 captures</span>
         </div>
         <ul class="capture-list" id="capture-list"></ul>
+        <div class="pagination" id="pagination" style="display: none; padding: 12px; text-align: center; border-top: 1px solid var(--border); font-size: 13px;">
+            <button onclick="prevPage()" id="btn-prev" style="padding: 4px 12px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer;">Prev</button>
+            <span id="page-info" style="margin: 0 16px; color: var(--text-muted);"></span>
+            <button onclick="nextPage()" id="btn-next" style="padding: 4px 12px; background: var(--bg-tertiary); border: 1px solid var(--border); border-radius: 4px; color: var(--text); cursor: pointer;">Next</button>
+        </div>
         <div class="empty-state" id="empty-state">
             <h2>Waiting for traffic</h2>
             <p>No LLM API calls intercepted yet. Follow the steps below.</p>
@@ -80,6 +85,8 @@ const state = {
     selectedId: null,
     selectedData: null,
     wsConnected: false,
+    currentPage: 1,
+    pageSize: 15,
 };
 
 const $ = (sel) => document.querySelector(sel);
@@ -88,7 +95,10 @@ const $ = (sel) => document.querySelector(sel);
 async function fetchCaptures() {
     const apiType = $('#filter-api-type').value;
     const search  = $('#search').value;
-    const params  = new URLSearchParams({ limit: 200 });
+    const params  = new URLSearchParams({ 
+        limit: state.pageSize,
+        offset: (state.currentPage - 1) * state.pageSize
+    });
     if (apiType) params.set('api_type', apiType);
     if (search)  params.set('search', search);
     const res = await fetch('/api/captures?' + params);
@@ -96,6 +106,7 @@ async function fetchCaptures() {
     state.captures = data.captures;
     state.totalCount = data.total;
     renderList();
+    renderPagination();
 }
 
 async function fetchCapture(id) {
@@ -128,23 +139,28 @@ function connectWS() {
         const events = JSON.parse(ev.data);
         for (const e of events) {
             if (e.method) {
-                // Insert stub, then fetch full data (sys_prompt fields) async.
-                const stub = {
-                    id: e.id, method: e.method, host: e.host,
-                    path: e.path, url: 'https://' + e.host + e.path,
-                    api_type: e.api_type, response_status: null,
-                    duration_ms: null, request_size: e.request_size,
-                    response_size: null,
-                };
-                state.captures.unshift(stub);
                 state.totalCount++;
-                fetchCapture(e.id).then(c => {
-                    if (c) {
-                        const idx = state.captures.findIndex(x => x.id === e.id);
-                        if (idx >= 0) state.captures[idx] = c;
-                        renderList();
+                if (state.currentPage === 1) {
+                    // Insert stub, then fetch full data (sys_prompt fields) async.
+                    const stub = {
+                        id: e.id, method: e.method, host: e.host,
+                        path: e.path, url: 'https://' + e.host + e.path,
+                        api_type: e.api_type, response_status: null,
+                        duration_ms: null, request_size: e.request_size,
+                        response_size: null,
+                    };
+                    state.captures.unshift(stub);
+                    if (state.captures.length > state.pageSize) {
+                        state.captures.pop();
                     }
-                });
+                    fetchCapture(e.id).then(c => {
+                        if (c) {
+                            const idx = state.captures.findIndex(x => x.id === e.id);
+                            if (idx >= 0) state.captures[idx] = c;
+                            renderList();
+                        }
+                    });
+                }
             }
             if (e.response_status !== undefined || e.error !== undefined) {
                 const found = state.captures.find(c => c.id === e.id);
@@ -162,6 +178,7 @@ function connectWS() {
             }
         }
         renderList();
+        renderPagination();
         if (events.some(e => e.method)) {
             const first = $('.capture-item');
             if (first) { first.classList.add('new-item');
@@ -171,6 +188,45 @@ function connectWS() {
 }
 
 // ── List rendering ─────────────────────────────────────────
+function prevPage() {
+    if (state.currentPage > 1) {
+        state.currentPage--;
+        fetchCaptures();
+    }
+}
+
+function nextPage() {
+    const maxPage = Math.ceil(state.totalCount / state.pageSize);
+    if (state.currentPage < maxPage) {
+        state.currentPage++;
+        fetchCaptures();
+    }
+}
+
+function renderPagination() {
+    const pagination = $('#pagination');
+    if (state.totalCount === 0) {
+        pagination.style.display = 'none';
+        return;
+    }
+    
+    const maxPage = Math.ceil(state.totalCount / state.pageSize) || 1;
+    if (maxPage <= 1) {
+        pagination.style.display = 'none';
+        return;
+    }
+    
+    pagination.style.display = 'block';
+    $('#page-info').textContent = `Page ${state.currentPage} of ${maxPage}`;
+    
+    $('#btn-prev').disabled = state.currentPage <= 1;
+    $('#btn-next').disabled = state.currentPage >= maxPage;
+    
+    // Grey out text if disabled
+    $('#btn-prev').style.opacity = state.currentPage <= 1 ? '0.5' : '1';
+    $('#btn-next').style.opacity = state.currentPage >= maxPage ? '0.5' : '1';
+}
+
 function renderList() {
     const list  = $('#capture-list');
     const empty = $('#empty-state');
@@ -778,6 +834,7 @@ function showRaw() {
 function filterByHostApiType(host, apiType) {
     $('#filter-api-type').value = apiType;
     $('#search').value = host;
+    state.currentPage = 1;
     fetchCaptures();
 }
 
@@ -830,9 +887,10 @@ divider.addEventListener('mousedown', (e) => {
 });
 
 // ── Filters ────────────────────────────────────────────────
-$('#filter-api-type').onchange = () => { fetchCaptures(); };
+$('#filter-api-type').onchange = () => { state.currentPage = 1; fetchCaptures(); };
 let searchTimer;
 $('#search').oninput = () => {
+    state.currentPage = 1;
     clearTimeout(searchTimer);
     searchTimer = setTimeout(fetchCaptures, 300);
 };
