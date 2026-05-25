@@ -162,12 +162,13 @@ function connectWS() {
                     });
                 }
             }
-            if (e.response_status !== undefined || e.error !== undefined) {
+            if (e.response_status !== undefined || e.error !== undefined || e.websocket_update !== undefined) {
                 const found = state.captures.find(c => c.id === e.id);
                 if (found) {
-                    found.response_status = e.response_status || 0;
-                    found.duration_ms = e.duration_ms || 0;
-                    found.response_size = e.response_size || 0;
+                    if (e.response_status !== undefined) found.response_status = e.response_status || 0;
+                    if (e.duration_ms !== undefined) found.duration_ms = e.duration_ms || 0;
+                    if (e.response_size !== undefined) found.response_size = e.response_size || 0;
+                    if (e.request_size !== undefined) found.request_size = e.request_size || 0;
                 }
                 if (state.selectedId === e.id) {
                     fetchCapture(e.id).then(c => {
@@ -303,6 +304,16 @@ function closeDetail() {
 // ── Content extraction ─────────────────────────────────────
 function extractSysPrompt(body) {
     if (!body) return null;
+    if (Array.isArray(body)) {
+        for (const frame of body) {
+            if (frame && typeof frame.instructions === 'string') {
+                return frame.instructions;
+            }
+        }
+        return null;
+    }
+    // Responses API format: top-level "instructions" field
+    if (typeof body.instructions === 'string') return body.instructions;
     // Anthropic format: top-level "system" field (string or content-block array)
     const sys = body.system;
     if (typeof sys === 'string') return sys;
@@ -331,16 +342,45 @@ function extractResponseContent(c) {
 
     // Non-streaming paths
     if (body) {
-        if (c.api_type === 'openai' && body.choices) {
-            const msg = body.choices[0]?.message;
-            return {
-                type: 'text',
-                content: msg?.content || '',
-                finishReason: body.choices[0]?.finish_reason,
-                model: body.model,
-                usage: body.usage,
-                toolCalls: msg?.tool_calls,
-            };
+        if (c.api_type === 'openai') {
+            if (body.choices) {
+                const msg = body.choices[0]?.message;
+                return {
+                    type: 'text',
+                    content: msg?.content || '',
+                    finishReason: body.choices[0]?.finish_reason,
+                    model: body.model,
+                    usage: body.usage,
+                    toolCalls: msg?.tool_calls,
+                };
+            } else if (body.output && Array.isArray(body.output)) {
+                let content = '';
+                const toolCalls = [];
+                for (const item of body.output) {
+                    if (item.content && Array.isArray(item.content)) {
+                        for (const part of item.content) {
+                            if ((part.type === 'output_text' || part.type === 'text') && part.text) {
+                                content += (content ? '\n' : '') + part.text;
+                            } else if (part.type === 'tool_call') {
+                                toolCalls.push(part);
+                            }
+                        }
+                    }
+                    if (item.tool_calls && Array.isArray(item.tool_calls)) {
+                        toolCalls.push(...item.tool_calls);
+                    } else if (item.type === 'tool_call') {
+                        toolCalls.push(item);
+                    }
+                }
+                return {
+                    type: 'text',
+                    content: content,
+                    finishReason: body.status || null,
+                    model: body.model || '',
+                    usage: body.usage || null,
+                    toolCalls: toolCalls.length ? toolCalls : undefined,
+                };
+            }
         }
         if (c.api_type === 'anthropic' && !Array.isArray(body)) {
             const textParts = (body.content || []).filter(p => p.type === 'text');
@@ -405,8 +445,58 @@ function parseSSEArray(events, apiType) {
     let finishReason = null;
     let model = null;
     let usage = null;
+    let toolCalls = [];
 
     for (const ev of events) {
+        // OpenAI Responses API streaming
+        if (ev.type === 'response.output_text.delta' && typeof ev.delta === 'string') {
+            content += ev.delta;
+        }
+        if (ev.type === 'response.output_item.done' && ev.item) {
+            const item = ev.item;
+            if (item.type === 'message' && Array.isArray(item.content)) {
+                for (const part of item.content) {
+                    if (part.type === 'output_text' || part.type === 'text') {
+                        if (part.text) {
+                            content = part.text;
+                        }
+                    } else if (part.type === 'tool_call') {
+                        toolCalls.push(part);
+                    }
+                }
+            } else if (item.type === 'tool_call') {
+                toolCalls.push(item);
+            }
+        }
+        if (ev.type === 'response.completed' && ev.response) {
+            const resp = ev.response;
+            if (resp.model) model = resp.model;
+            if (resp.usage) usage = resp.usage;
+            if (resp.status) finishReason = resp.status;
+            if (resp.output && Array.isArray(resp.output)) {
+                let finalContent = '';
+                const finalTools = [];
+                for (const item of resp.output) {
+                    if (item.content && Array.isArray(item.content)) {
+                        for (const part of item.content) {
+                            if ((part.type === 'output_text' || part.type === 'text') && part.text) {
+                                finalContent += (finalContent ? '\n' : '') + part.text;
+                            } else if (part.type === 'tool_call') {
+                                finalTools.push(part);
+                            }
+                        }
+                    }
+                    if (item.tool_calls && Array.isArray(item.tool_calls)) {
+                        finalTools.push(...item.tool_calls);
+                    } else if (item.type === 'tool_call') {
+                        finalTools.push(item);
+                    }
+                }
+                if (finalContent) content = finalContent;
+                if (finalTools.length) toolCalls = finalTools;
+            }
+        }
+
         // OpenAI streaming: choices[0].delta.content
         if (ev.choices) {
             const delta = ev.choices[0]?.delta;
@@ -449,6 +539,7 @@ function parseSSEArray(events, apiType) {
         finishReason,
         model,
         usage,
+        toolCalls: toolCalls.length ? toolCalls : undefined,
     };
 }
 
@@ -633,7 +724,7 @@ function extractMessageText(msg) {
     }
     if (typeof c === 'string') return c || fallback;
     if (Array.isArray(c)) {
-        const parts = c.filter(b => b.type === 'text' || b.type === 'tool_result' || b.type === 'tool_use').map(b => {
+        const parts = c.filter(b => b.type === 'text' || b.type === 'input_text' || b.type === 'output_text' || b.type === 'tool_result' || b.type === 'tool_use').map(b => {
             if (b.type === 'tool_result') {
                 if (typeof b.content === 'string') return b.content;
                 if (Array.isArray(b.content)) return b.content.map(x => x.text || '').join('\n');
@@ -669,11 +760,45 @@ function getMessageType(msg) {
 }
 
 function renderMessagesSection(c) {
-    let messages = c.request_body_parsed && c.request_body_parsed.messages;
-    if (!messages && c.request_body_parsed && c.request_body_parsed.contents) {
-        messages = c.request_body_parsed.contents;
+    let messages = null;
+
+    if (Array.isArray(c.request_body_parsed)) {
+        messages = [];
+        for (const frame of c.request_body_parsed) {
+            const inp = frame.input;
+            if (inp) {
+                if (typeof inp === 'string') {
+                    messages.push({ role: 'user', content: inp });
+                } else if (Array.isArray(inp)) {
+                    for (const item of inp) {
+                        if (item && item.role) {
+                            messages.push(item);
+                        } else {
+                            messages.push({ role: 'user', content: item });
+                        }
+                    }
+                }
+            }
+        }
+    } else {
+        messages = c.request_body_parsed && c.request_body_parsed.messages;
+        if (!messages && c.request_body_parsed && c.request_body_parsed.contents) {
+            messages = c.request_body_parsed.contents;
+        }
+        if (!messages && c.request_body_parsed && c.request_body_parsed.input) {
+            const inp = c.request_body_parsed.input;
+            if (typeof inp === 'string') {
+                messages = [{ role: 'user', content: inp }];
+            } else if (Array.isArray(inp)) {
+                if (inp.length > 0 && inp[0].role) {
+                    messages = inp;
+                } else {
+                    messages = [{ role: 'user', content: inp }];
+                }
+            }
+        }
     }
-    if (!messages) return;
+    if (!messages || !messages.length) return;
 
     const nonSys = messages.filter(m => m.role !== 'system');
     if (!nonSys.length) {

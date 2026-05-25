@@ -44,8 +44,13 @@ class Config:
     api_patterns: list[str] = field(default_factory=lambda: [
         "/chat/completions",          # OpenAI, DeepSeek, many providers
         "/v1/messages",               # Anthropic
-        "/v1beta/models/",            # Google AI
+        "/v1beta/models/",            # Google AI (v1beta)
+        "/v1alpha/models/",           # Google AI (v1alpha)
+        "/v1/models/",                # Google AI (v1)
+        "/projects/",                 # Google Vertex AI (e.g., /v1/projects/.../locations/.../publishers/google/models/...)
         "/openai/deployments/",       # Azure OpenAI
+        "/responses",                 # OpenAI Responses API
+        "/codex",                     # Codex WebSocket & REST API
     ])
 
 

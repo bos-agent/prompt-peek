@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Misc (dfd12b3bcd2766bf)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --surface-2: #1c2333;
+  --border: #30363d;
+  --border-light: #3d444d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --accent: #58a6ff;
+  --accent-dim: #1f6feb33;
+  --green: #3fb950;
+  --orange: #d29922;
+  --purple: #bc8cff;
+  --red: #f85149;
+  --radius: 8px;
+  --font: 'Inter', -apple-system, sans-serif;
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+header {
+  background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #1a1e2e 100%);
+  border-bottom: 1px solid var(--border);
+  padding: 2rem 0;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(12px);
+}
+.header-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 2rem;
+}
+header h1 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 0.75rem;
+}
+.mono { font-family: var(--mono); color: var(--accent); }
+
+.meta-chips {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.chip {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 0.25rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-weight: 500;
+}
+.chip.model {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.chip.api-fmt {
+  background: #3fb95022;
+  border-color: var(--green);
+  color: var(--green);
+}
+
+main {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+section { margin-bottom: 3rem; }
+
+section h2 {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.count {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-size: 0.8rem;
+  padding: 0.15rem 0.5rem;
+  border-radius: 10px;
+  font-family: var(--mono);
+}
+
+/* System Prompt */
+.prompt-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.5rem 2rem;
+  font-size: 0.9rem;
+  line-height: 1.7;
+  max-height: 70vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-light) transparent;
+}
+.prompt-box h3 {
+  color: var(--accent);
+  font-size: 1.1rem;
+  margin: 1.5rem 0 0.5rem 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--border);
+}
+.prompt-box h3:first-child { border-top: none; margin-top: 0; }
+.prompt-box h4 {
+  color: var(--purple);
+  font-size: 0.95rem;
+  margin: 1rem 0 0.4rem 0;
+}
+.prompt-box p {
+  margin: 0.3rem 0;
+  color: var(--text);
+}
+.prompt-box li {
+  margin-left: 1.5rem;
+  margin-bottom: 0.2rem;
+  color: var(--text-muted);
+}
+.prompt-box pre {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  margin: 0.75rem 0;
+  overflow-x: auto;
+}
+.prompt-box code {
+  font-family: var(--mono);
+  font-size: 0.85rem;
+  color: var(--green);
+}
+.prompt-box br { display: block; content: ""; margin: 0.3rem 0; }
+
+/* Tools */
+.tools-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.tool-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+  transition: border-color 0.2s;
+}
+.tool-card:hover { border-color: var(--accent); }
+
+.tool-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.tool-header h3 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--green);
+  font-family: var(--mono);
+}
+.param-count {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  padding: 0.2rem 0.5rem;
+  border-radius: 10px;
+  font-family: var(--mono);
+}
+
+.tool-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.full-desc {
+  margin-bottom: 0.75rem;
+}
+.full-desc summary {
+  font-size: 0.8rem;
+  color: var(--accent);
+  cursor: pointer;
+  user-select: none;
+  margin-bottom: 0.5rem;
+}
+.full-desc summary:hover { text-decoration: underline; }
+.desc-content {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1rem;
+  max-height: 40vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+/* Params table */
+.params-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.params-table thead th {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-weight: 500;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.params-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+.params-table tr:last-child td { border-bottom: none; }
+.param-name code {
+  font-family: var(--mono);
+  font-size: 0.82rem;
+  color: var(--orange);
+}
+.param-type code {
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  color: var(--purple);
+}
+.param-desc { color: var(--text-muted); }
+.req {
+  font-size: 0.65rem;
+  background: var(--red);
+  color: #fff;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  margin-left: 0.3rem;
+  font-weight: 600;
+  vertical-align: middle;
+  text-transform: uppercase;
+}
+.no-params {
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.empty { color: var(--text-muted); font-style: italic; }
+
+footer {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  border-top: 1px solid var(--border);
+}
+footer strong { color: var(--accent); }
+
+@media (max-width: 768px) {
+  main { padding: 1rem; }
+  .prompt-box { padding: 1rem; }
+  .params-table { font-size: 0.75rem; }
+}
+
+</style>
+</head>
+<body>
+<header>
+  <div class="header-inner">
+    <h1>Misc (dfd12b3bcd2766bf)</h1>
+    <div class="meta-chips">
+      <span class="chip api-fmt">Gemini</span>
+      <span class="chip model">gemini-3.1-pro-preview</span>
+      <span class="chip">Hash: dfd12b3bcd2766bf</span>
+      <span class="chip">Source: captures-old.db (capture ID 113)</span>
+      <span class="chip">1 messages</span>
+    </div>
+  </div>
+</header>
+
+<main>
+  <section id="system-prompt">
+    <h2>System Prompt</h2>
+    <div class="prompt-box">
+      <p>Generate a short, descriptive title (3-7 words) for a conversation that starts with the following exchange. The title should capture the main topic or intent. Return ONLY the title text, nothing else. No quotes, no punctuation at the end, no prefixes.</p>
+    </div>
+  </section>
+
+  <section id="tools">
+    <h2>Tools <span class="count">0</span></h2>
+    <div class="tools-grid">
+      
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>Generated by <strong>prompt-peek</strong> &middot; record 113 &middot; generativelanguage.googleapis.com</p>
+</footer>
+</body>
+</html>

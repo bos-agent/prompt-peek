@@ -42,7 +42,21 @@ def _deserialize_capture_fields(c: dict):
             try:
                 c[f"{field}_parsed"] = json.loads(raw)
             except (json.JSONDecodeError, TypeError):
-                c[f"{field}_parsed"] = None
+                lines = []
+                for line in raw.split('\n'):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("data: "):
+                        stripped = stripped[6:].strip()
+                    try:
+                        lines.append(json.loads(stripped))
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                if lines:
+                    c[f"{field}_parsed"] = lines
+                else:
+                    c[f"{field}_parsed"] = None
         else:
             c[f"{field}_parsed"] = None
 

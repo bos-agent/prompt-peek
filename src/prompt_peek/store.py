@@ -136,6 +136,49 @@ class Store:
         )
         conn.commit()
 
+    def append_websocket_message(self, capture_id: int, text: str, from_client: bool):
+        conn = self._get_conn()
+        row = conn.execute(
+            "SELECT request_body, response_body, system_prompt_hash FROM captures WHERE id = ?",
+            (capture_id,)
+        ).fetchone()
+        if not row:
+            return
+
+        if from_client:
+            req = row["request_body"] or ""
+            if req:
+                req += "\n" + text
+            else:
+                req = text
+
+            system_prompt_hash = row["system_prompt_hash"]
+            try:
+                body_json = json.loads(text)
+                from prompt_peek.proxy_addon import _extract_system_prompt_text
+                sys_text = _extract_system_prompt_text(body_json)
+                if sys_text:
+                    import hashlib
+                    system_prompt_hash = hashlib.sha256(
+                        sys_text.encode("utf-8")
+                    ).hexdigest()[:16]
+            except Exception:
+                pass
+
+            conn.execute(
+                "UPDATE captures SET request_body = ?, system_prompt_hash = ?, request_size = ? WHERE id = ?",
+                (req, system_prompt_hash, len(req), capture_id)
+            )
+        else:
+            resp = row["response_body"] or ""
+            resp += f"data: {text}\n"
+
+            conn.execute(
+                "UPDATE captures SET response_body = ?, response_size = ? WHERE id = ?",
+                (resp, len(resp), capture_id)
+            )
+        conn.commit()
+
     # ── read ───────────────────────────────────────────────────────
 
     def list_captures(self, *, limit: int = 50, offset: int = 0,

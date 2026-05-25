@@ -22,10 +22,15 @@ _EVENT_QUEUE_CAP = 5000
 def _extract_system_prompt_text(body: dict) -> Optional[str]:
     """Extract canonical system prompt text from a parsed request body.
 
-    Handles both Anthropic (top-level ``system``) and OpenAI
-    (``role: "system"`` inside ``messages``) formats, returning a
-    single string that is used for hashing, comparison, and display.
+    Handles Anthropic (top-level ``system``), OpenAI Responses (``instructions``),
+    and OpenAI Chat/DeepSeek (``role: "system"`` inside ``messages``) formats,
+    returning a single string that is used for hashing, comparison, and display.
     """
+    # Responses API format: top-level "instructions" (string)
+    instructions = body.get("instructions")
+    if isinstance(instructions, str):
+        return instructions
+
     # Anthropic format: top-level "system" (string or content-block array)
     sys_field = body.get("system")
     if isinstance(sys_field, str):
@@ -116,7 +121,7 @@ class PromptPeekAddon:
         return False
 
     def _detect_api_type(self, path: str, body: Optional[dict]) -> str:
-        if "/chat/completions" in path:
+        if "/chat/completions" in path or "/responses" in path or "/codex" in path:
             return "openai"
         if "/messages" in path:
             return "anthropic"
@@ -237,4 +242,24 @@ class PromptPeekAddon:
         self.event_bus.push({
             "id": capture_id,
             "error": error_msg,
+        })
+
+    def websocket_message(self, flow: http.HTTPFlow) -> None:
+        capture_id: Optional[int] = getattr(flow, "_prompt_peek_capture_id", None)
+        if capture_id is None:
+            return
+
+        # flow.websocket is guaranteed to exist for websocket flows.
+        if not flow.websocket or not flow.websocket.messages:
+            return
+
+        message = flow.websocket.messages[-1]
+        text = message.text
+        if not text:
+            return
+
+        self.store.append_websocket_message(capture_id, text, message.from_client)
+        self.event_bus.push({
+            "id": capture_id,
+            "websocket_update": True,
         })

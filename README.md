@@ -57,6 +57,24 @@ uv sync
 
 3. Open the Web UI at [http://127.0.0.1:9000](http://127.0.0.1:9000) to inspect incoming prompts and responses.
 
+### Exporting System Prompts and Tools
+
+You can render captured prompt/response records into standalone, beautifully styled HTML pages or clean Markdown documents. The script supports rendering individual capture records or scanning the database for all unique system prompts and tools.
+
+```bash
+# Render a specific capture record by its ID to HTML (default)
+uv run python scripts/render_capture.py 42
+
+# Render a specific capture to both HTML and Markdown and open the HTML in the browser
+uv run python scripts/render_capture.py 42 --format both --browser
+
+# Scan the database and extract all unique system prompts and tools (default output to captured/html/ and captured/md/)
+uv run python scripts/render_capture.py --format both
+
+# Scan and export from a custom database to a custom output directory
+uv run python scripts/render_capture.py --db data/captures-old.db --out my_exports --format both --browser
+```
+
 ## Architecture
 
 - **`proxy_addon.py`**: mitmproxy addon that intercepts traffic and pushes events via a thread-safe EventBus.

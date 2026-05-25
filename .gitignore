@@ -1,5 +1,6 @@
 .deepseek/
 .claude/
+.antigravitycli/
 data/
 
 # Byte-compiled / optimized / DLL files
